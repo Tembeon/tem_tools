@@ -518,6 +518,437 @@ void main() {
     });
   });
 
+  group('DedupMiddleware', () {
+    test('deduplicates concurrent identical GET requests', () async {
+      var networkCalls = 0;
+      final completer = Completer<MiddlewareResponse>();
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) {
+        networkCalls++;
+        return completer.future;
+      }
+
+      // Start multiple concurrent requests
+      final future1 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+      final future3 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+
+      // Only one network call should be made
+      expect(networkCalls, equals(1));
+
+      // Complete the request
+      completer.complete(MiddlewareResponse.immediate(
+        http.StreamedResponse(
+          Stream.value(utf8.encode('shared response')),
+          200,
+        ),
+      ));
+
+      // All futures should resolve
+      final responses = await Future.wait([future1, future2, future3]);
+
+      for (final response in responses) {
+        final body = await response.response.stream.bytesToString();
+        expect(body, equals('shared response'));
+        expect(response.response.statusCode, equals(200));
+      }
+
+      // Still only one network call
+      expect(networkCalls, equals(1));
+    });
+
+    test('does not deduplicate non-GET/HEAD requests by default', () async {
+      var networkCalls = 0;
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) async {
+        networkCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+        );
+      }
+
+      // Start multiple concurrent POST requests
+      final future1 = dedup.process(
+        MiddlewareContext(request: http.Request('POST', uri)),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(request: http.Request('POST', uri)),
+        next,
+      );
+
+      await Future.wait([future1, future2]);
+
+      // Both POST requests should go to network (not deduplicated)
+      expect(networkCalls, equals(2));
+    });
+
+    test('deduplicates HEAD requests', () async {
+      var networkCalls = 0;
+      final completer = Completer<MiddlewareResponse>();
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) {
+        networkCalls++;
+        return completer.future;
+      }
+
+      final future1 = dedup.process(
+        MiddlewareContext(request: http.Request('HEAD', uri)),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(request: http.Request('HEAD', uri)),
+        next,
+      );
+
+      expect(networkCalls, equals(1));
+
+      completer.complete(MiddlewareResponse.immediate(
+        http.StreamedResponse(Stream.value([]), 200),
+      ));
+
+      await Future.wait([future1, future2]);
+
+      expect(networkCalls, equals(1));
+    });
+
+    test('different URLs are not deduplicated', () async {
+      var networkCalls = 0;
+      final dedup = DedupMiddleware();
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) async {
+        networkCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(
+            Stream.value(utf8.encode('response ${ctx.request.url}')),
+            200,
+          ),
+        );
+      }
+
+      final future1 = dedup.process(
+        MiddlewareContext(
+            request: http.Request('GET', Uri.parse('https://example.com/a'))),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(
+            request: http.Request('GET', Uri.parse('https://example.com/b'))),
+        next,
+      );
+
+      final responses = await Future.wait([future1, future2]);
+
+      // Both different URLs should make network calls
+      expect(networkCalls, equals(2));
+
+      final body1 = await responses[0].response.stream.bytesToString();
+      final body2 = await responses[1].response.stream.bytesToString();
+      expect(body1, contains('/a'));
+      expect(body2, contains('/b'));
+    });
+
+    test('sequential requests are not deduplicated', () async {
+      var networkCalls = 0;
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) async {
+        networkCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(
+            Stream.value(utf8.encode('response $networkCalls')),
+            200,
+          ),
+        );
+      }
+
+      // Sequential requests (not concurrent)
+      final response1 = await dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+      final response2 = await dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+
+      // Both should make network calls since they're not concurrent
+      expect(networkCalls, equals(2));
+
+      final body1 = await response1.response.stream.bytesToString();
+      final body2 = await response2.response.stream.bytesToString();
+      expect(body1, equals('response 1'));
+      expect(body2, equals('response 2'));
+    });
+
+    test('propagates errors to all waiting requests', () async {
+      var networkCalls = 0;
+      final completer = Completer<MiddlewareResponse>();
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) {
+        networkCalls++;
+        return completer.future;
+      }
+
+      final future1 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+
+      expect(networkCalls, equals(1));
+
+      // Complete with error
+      completer.completeError(Exception('Network error'));
+
+      // Both futures should fail with the same error
+      await expectLater(future1, throwsException);
+      await expectLater(future2, throwsException);
+    });
+
+    test('uses custom key generator', () async {
+      var networkCalls = 0;
+      final completer = Completer<MiddlewareResponse>();
+      final dedup = DedupMiddleware(
+        // Only use URL path as key (ignore query params)
+        keyGenerator: (request) => request.url.path,
+      );
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) {
+        networkCalls++;
+        return completer.future;
+      }
+
+      // Different query params but same path - should be deduplicated
+      final future1 = dedup.process(
+        MiddlewareContext(
+            request:
+                http.Request('GET', Uri.parse('https://example.com/data?v=1'))),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(
+            request:
+                http.Request('GET', Uri.parse('https://example.com/data?v=2'))),
+        next,
+      );
+
+      expect(networkCalls, equals(1));
+
+      completer.complete(MiddlewareResponse.immediate(
+        http.StreamedResponse(Stream.value(utf8.encode('shared')), 200),
+      ));
+
+      final responses = await Future.wait([future1, future2]);
+
+      final body1 = await responses[0].response.stream.bytesToString();
+      final body2 = await responses[1].response.stream.bytesToString();
+      expect(body1, equals('shared'));
+      expect(body2, equals('shared'));
+    });
+
+    test('uses custom shouldDedup function', () async {
+      var networkCalls = 0;
+      final dedup = DedupMiddleware(
+        // Disable dedup for all requests
+        shouldDedup: (request) => false,
+      );
+      final uri = Uri.parse('https://example.com/data');
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) async {
+        networkCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+        );
+      }
+
+      final future1 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+      final future2 = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        next,
+      );
+
+      await Future.wait([future1, future2]);
+
+      // Both requests should go to network (dedup disabled)
+      expect(networkCalls, equals(2));
+    });
+
+    test('sets metadata for dedup key', () async {
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+      MiddlewareContext? capturedContext;
+
+      await dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) async {
+          capturedContext = ctx;
+          return MiddlewareResponse.immediate(
+            http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+          );
+        },
+      );
+
+      // Request should have dedup key in metadata
+      expect(capturedContext!.metadata['dedup:key'], equals('GET:$uri'));
+    });
+
+    test('marks shared requests in metadata', () async {
+      final completer = Completer<MiddlewareResponse>();
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      // Track contexts - first request goes to next(), shared ones don't
+      MiddlewareContext? firstContext;
+
+      // First request - goes to network
+      final context1 = MiddlewareContext(request: http.Request('GET', uri));
+      final future1 = dedup.process(
+        context1,
+        (ctx) {
+          firstContext = ctx;
+          return completer.future;
+        },
+      );
+
+      // Second request - should be deduplicated (won't call next)
+      final context2 = MiddlewareContext(request: http.Request('GET', uri));
+      final future2 = dedup.process(
+        context2,
+        (ctx) async {
+          fail('Second request should not reach next()');
+        },
+      );
+
+      completer.complete(MiddlewareResponse.immediate(
+        http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+      ));
+
+      await Future.wait([future1, future2]);
+
+      // First request should have dedup key
+      expect(firstContext!.metadata['dedup:key'], equals('GET:$uri'));
+
+      // Second context should be marked as shared
+      expect(context2.metadata['dedup:shared'], isTrue);
+    });
+
+    test('cleans up in-flight tracker after completion', () async {
+      final dedup = DedupMiddleware();
+
+      expect(dedup.inFlightCount, equals(0));
+
+      await dedup.process(
+        MiddlewareContext(
+          request: http.Request('GET', Uri.parse('https://example.com/data')),
+        ),
+        (ctx) async => MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+        ),
+      );
+
+      // Should be cleaned up after request completes
+      expect(dedup.inFlightCount, equals(0));
+    });
+
+    test('cleans up in-flight tracker after error', () async {
+      final dedup = DedupMiddleware();
+
+      expect(dedup.inFlightCount, equals(0));
+
+      // Create a completer that will throw when awaited
+      final errorCompleter = Completer<MiddlewareResponse>();
+
+      final future = dedup.process(
+        MiddlewareContext(
+          request: http.Request('GET', Uri.parse('https://example.com/data')),
+        ),
+        (ctx) => errorCompleter.future,
+      );
+
+      // Trigger the error
+      errorCompleter.completeError(Exception('Network error'));
+
+      // Should throw
+      await expectLater(future, throwsA(isA<Exception>()));
+
+      // Should be cleaned up even after error
+      expect(dedup.inFlightCount, equals(0));
+    });
+
+    test('does not deduplicate background requests', () async {
+      var nextCalls = 0;
+      final dedup = DedupMiddleware();
+
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+      context.markAsBackground();
+
+      // Process as background request
+      await dedup.process(
+        context,
+        (ctx) async {
+          nextCalls++;
+          return MiddlewareResponse.immediate(
+            http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+          );
+        },
+      );
+
+      // Background requests should not be tracked (they pass through)
+      expect(dedup.inFlightCount, equals(0));
+      expect(nextCalls, equals(1));
+    });
+
+    test('preserves background continuation from downstream middleware',
+        () async {
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+
+      // Simulate a downstream middleware that returns a background continuation
+      final response = await dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) async {
+          final bgContext = ctx.copyForBackground();
+          return MiddlewareResponse.withBackgroundContinuation(
+            response:
+                http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+            backgroundContext: bgContext,
+          );
+        },
+      );
+
+      // The background continuation should be preserved
+      expect(response.hasBackgroundContinuation, isTrue);
+      expect(response.backgroundContext, isNotNull);
+    });
+  });
+
   group('InMemorySwrCache', () {
     test('stores and retrieves values', () async {
       final cache = InMemorySwrCache();
@@ -651,5 +1082,20 @@ class _ErrorHandlingMiddleware extends HttpMiddleware {
   @override
   void onBackgroundError(Object error, StackTrace stackTrace) {
     onError();
+  }
+}
+
+class _ContextCaptureMiddleware extends HttpMiddleware {
+  _ContextCaptureMiddleware(this.contexts);
+
+  final List<MiddlewareContext> contexts;
+
+  @override
+  Future<MiddlewareResponse> process(
+    MiddlewareContext context,
+    MiddlewareNext next,
+  ) {
+    contexts.add(context);
+    return next(context);
   }
 }

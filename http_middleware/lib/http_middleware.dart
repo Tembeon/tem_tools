@@ -61,5 +61,6 @@ export 'src/middleware_context.dart';
 export 'src/middleware_response.dart';
 
 // Built-in middlewares
+export 'src/middlewares/dedup_middleware.dart';
 export 'src/middlewares/logging_middleware.dart';
 export 'src/middlewares/swr_middleware.dart';
