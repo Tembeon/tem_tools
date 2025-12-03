@@ -23,7 +23,7 @@ dependencies:
     git:
       url: https://github.com/tembeon/tem_tools.git
       ref: main
-      path: json/json
+      path: json
 ```
 
 Import the package:
