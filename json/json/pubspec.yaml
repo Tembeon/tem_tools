@@ -1,0 +1,13 @@
+name: json
+description: A library for parsing JSON responses from the server.
+version: 1.0.0
+# repository: https://github.com/my_org/my_repo
+
+environment:
+  sdk: '>=3.10.1 <4.0.0'
+
+dependencies:
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.6
