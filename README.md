@@ -11,6 +11,6 @@ dependencies. Each tool is designed to be:
 
 ## Available Tools
 
-| Tool              | Description                                                                                                                        | Updated     |
-|-------------------|------------------------------------------------------------------------------------------------------------------------------------|-------------|
-| [json](json/json) | A lightweight and type-safe JSON parsing class for Dart that provides convenient methods for accessing and transforming JSON data. | Dec 3, 2025 |
+| Tool         | Description                                                                                                                        | Updated     |
+|--------------|------------------------------------------------------------------------------------------------------------------------------------|-------------|
+| [json](json) | A lightweight and type-safe JSON parsing class for Dart that provides convenient methods for accessing and transforming JSON data. | Dec 3, 2025 |
