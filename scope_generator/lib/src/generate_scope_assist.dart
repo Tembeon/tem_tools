@@ -13,6 +13,10 @@ import 'package:scope_generator/src/scope_template.dart';
 /// - `ChangeNotifier`
 /// - `ValueNotifier<T>`
 /// - Or any subclass of the above
+///
+/// Generates two files:
+/// - `*_scope.dart` - Scope widget, InheritedModel, aspects enum
+/// - `*_scope_controller.dart` - IScopeController interface
 class GenerateScopeAssist extends ResolvedCorrectionProducer {
   static const _assistKind = AssistKind(
     'scope_generator.generateScope',
@@ -49,20 +53,108 @@ class GenerateScopeAssist extends ResolvedCorrectionProducer {
     final scopeName = _deriveScopeName(controllerName);
     final stateType = _extractStateType(superclassType);
 
-    // Generate code
+    // Derive file paths
+    final currentFilePath = file;
+    final directory = _getDirectory(currentFilePath);
+
+    // Derive new file names based on scope name
+    final scopeBaseName = _toSnakeCase(scopeName);
+    final scopeFilePath = '$directory/$scopeBaseName.dart';
+    final scopeControllerFilePath = '$directory/${scopeBaseName}_controller.dart';
+
+    // Get package name and convert to package: imports
+    final packageName = _getPackageName(currentFilePath);
+    final libRelativePath = _getLibRelativePath(currentFilePath);
+    final libRelativeDir = _getDirectory(libRelativePath);
+
+    // Import paths (package:)
+    final controllerImportPath = 'package:$packageName/$libRelativePath';
+    final scopeControllerImportPath = 'package:$packageName/$libRelativeDir/${scopeBaseName}_controller.dart';
+
+    // Generate code for scope controller interface
+    final scopeControllerCode = generateScopeControllerCode(
+      scopeName: scopeName,
+      controllerName: controllerName,
+    );
+
+    // Generate code for scope
     final scopeCode = generateScopeCode(
       scopeName: scopeName,
       controllerName: controllerName,
       stateType: stateType,
+      controllerImportPath: controllerImportPath,
+      scopeControllerImportPath: scopeControllerImportPath,
     );
 
-    await builder.addDartFileEdit(file, (builder) {
-      // Insert after the class declaration
-      builder.addInsertion(classDecl.end, (builder) {
-        builder.write('\n\n');
+    // Create scope controller file
+    await builder.addDartFileEdit(scopeControllerFilePath, (builder) {
+      builder.addInsertion(0, (builder) {
+        builder.write(scopeControllerCode);
+      });
+    });
+
+    // Create scope file
+    await builder.addDartFileEdit(scopeFilePath, (builder) {
+      builder.addInsertion(0, (builder) {
         builder.write(scopeCode);
       });
     });
+  }
+
+  /// Gets the directory part of a file path.
+  String _getDirectory(String filePath) {
+    final lastSlash = filePath.lastIndexOf('/');
+    if (lastSlash == -1) return '.';
+    return filePath.substring(0, lastSlash);
+  }
+
+  /// Gets the file name from a file path.
+  String _getFileName(String filePath) {
+    final lastSlash = filePath.lastIndexOf('/');
+    if (lastSlash == -1) return filePath;
+    return filePath.substring(lastSlash + 1);
+  }
+
+  /// Extracts package name from file path.
+  ///
+  /// Looks for the directory name right before 'lib/' in the path.
+  /// E.g., `/path/to/my_app/lib/src/file.dart` → `my_app`
+  String _getPackageName(String filePath) {
+    final parts = filePath.split('/');
+    final libIndex = parts.indexOf('lib');
+    if (libIndex > 0) {
+      return parts[libIndex - 1];
+    }
+    // Fallback: use parent directory name
+    return parts[parts.length - 2];
+  }
+
+  /// Gets path relative to lib/ directory.
+  ///
+  /// E.g., `/path/to/my_app/lib/features/auth/auth_controller.dart`
+  /// → `features/auth/auth_controller.dart`
+  String _getLibRelativePath(String filePath) {
+    final libIndex = filePath.indexOf('/lib/');
+    if (libIndex != -1) {
+      return filePath.substring(libIndex + 5); // +5 to skip '/lib/'
+    }
+    // Fallback: return file name
+    return _getFileName(filePath);
+  }
+
+  /// Converts PascalCase to snake_case.
+  String _toSnakeCase(String name) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < name.length; i++) {
+      final char = name[i];
+      if (char.toUpperCase() == char && char.toLowerCase() != char) {
+        if (i > 0) buffer.write('_');
+        buffer.write(char.toLowerCase());
+      } else {
+        buffer.write(char);
+      }
+    }
+    return buffer.toString();
   }
 
   /// Checks if the type is or extends Listenable.

@@ -1,3 +1,25 @@
+/// Generates the IScopeController interface code.
+///
+/// This goes into `*_scope_controller.dart` file.
+String generateScopeControllerCode({
+  required String scopeName,
+  required String controllerName,
+}) {
+  final stateName = '_${scopeName}State';
+  final scopeControllerName = 'I${scopeName}Controller';
+
+  final buffer = StringBuffer();
+
+  buffer.writeln('/// Interface for scope-level actions in [$scopeName].');
+  buffer.writeln('///');
+  buffer.writeln('/// Implemented by [$stateName], accessed via');
+  buffer.writeln('/// [$scopeName.scopeControllerOf].');
+  buffer.writeln('abstract interface class $scopeControllerName {');
+  buffer.write('}');
+
+  return buffer.toString();
+}
+
 /// Generates Scope boilerplate code for a controller class.
 ///
 /// The generated code follows the InheritedModel pattern with aspects:
@@ -5,11 +27,14 @@
 /// - `_XxxScopeState` - State implementing `IXxxScopeController`
 /// - `_XxxInherited` - InheritedModel with aspects for selective rebuilds
 /// - `_XxxAspect` - Enum of subscribable aspects
-/// - `IXxxScopeController` - Interface for scope-level actions
+///
+/// This goes into `*_scope.dart` file.
 String generateScopeCode({
   required String scopeName,
   required String controllerName,
   required String? stateType,
+  required String controllerImportPath,
+  required String scopeControllerImportPath,
 }) {
   // Derive names
   final baseName = scopeName.replaceAll('Scope', '');
@@ -26,15 +51,12 @@ String generateScopeCode({
 
   final buffer = StringBuffer();
 
-  // ==================== IScopeController Interface ====================
-  buffer.writeln('/// Interface for scope-level actions in [$scopeName].');
-  buffer.writeln('///');
-  buffer.writeln('/// Implemented by [$stateName], accessed via');
-  buffer.writeln('/// [$scopeName.scopeControllerOf].');
-  buffer.writeln('abstract interface class $scopeControllerName {');
-  buffer.writeln('  // TODO: Add scope-level methods');
-  buffer.writeln('  // Future<void> refresh();');
-  buffer.writeln('}');
+  // Imports
+  buffer.writeln("import 'package:flutter/foundation.dart';");
+  buffer.writeln("import 'package:flutter/material.dart';");
+  buffer.writeln();
+  buffer.writeln("import '$controllerImportPath';");
+  buffer.writeln("import '$scopeControllerImportPath';");
   buffer.writeln();
 
   // ==================== Main Scope Widget ====================
@@ -91,7 +113,7 @@ String generateScopeCode({
   buffer.writeln('  @override');
   buffer.writeln('  void initState() {');
   buffer.writeln('    super.initState();');
-  buffer.writeln('    _stateController = $controllerName(/* TODO: add dependencies */);');
+  buffer.writeln('    _stateController = $controllerName();');
   buffer.writeln('  }');
   buffer.writeln();
   buffer.writeln('  @override');
@@ -115,8 +137,6 @@ String generateScopeCode({
   buffer.writeln('      child: widget.child,');
   buffer.writeln('    );');
   buffer.writeln('  }');
-  buffer.writeln();
-  buffer.writeln('  // TODO: Implement $scopeControllerName methods');
   buffer.writeln('}');
   buffer.writeln();
 
