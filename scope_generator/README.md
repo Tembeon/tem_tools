@@ -1,132 +1,106 @@
 # scope_generator
 
-Analysis server plugin that generates Flutter Scope boilerplate from `Listenable`-based controller classes.
+Dart analyzer plugin that generates Flutter Scope boilerplate in seconds.
 
-## Features
+No code generation. No build_runner. Just Quick Actions.
 
-- Quick Assist: "Generate Scope wrapper"
-- Works with any `Listenable` subclass (`ValueNotifier`, `ChangeNotifier`, custom)
-- Generates complete Scope pattern with `stateOf`/`controllerOf` methods
-- IDE integration (VS Code, Android Studio, IntelliJ)
+## Quick Start
 
-## Installation
-
-Add to your project's `analysis_options.yaml`:
-
+**1. Add to `analysis_options.yaml`:**
 ```yaml
 plugins:
   scope_generator:
-    path: /path/to/scope_generator
+    git:
+      url: https://github.com/Tembeon/tem_tools.git
+      path: scope_generator
+      ref: 2025.01.09
 ```
 
-Or from pub.dev (when published):
+**2. Restart Analysis Server**
 
-```yaml
-plugins:
-  scope_generator: ^1.0.0
-```
+**3. Use Quick Actions (Cmd+. / Ctrl+.)**
 
-**Important:** Restart the Analysis Server after adding the plugin.
+## Features
 
-## Usage
+### Generate Scope wrapper
 
-1. Write a controller class:
+Write a controller → get a complete Scope with InheritedModel.
 
 ```dart
+// Put cursor here, press Cmd+.
 class JamsStateController extends ValueNotifier<JamsState> {
-  JamsStateController() : super(const JamsInitial());
-
-  // ... methods
+  ...
 }
 ```
 
-2. Place cursor on the class name
-3. Open Quick Actions (Cmd+. / Ctrl+.)
-4. Select "Generate Scope wrapper"
+**Creates 2 files:**
 
-## Generated Code
+| File | Contains |
+|------|----------|
+| `jams_scope.dart` | Scope widget, InheritedModel, aspects |
+| `jams_scope_controller.dart` | IScopeController interface |
 
-The plugin generates:
+**Generated API:**
+```dart
+JamsScope.stateOf(context)           // Rebuilds on state change
+JamsScope.stateControllerOf(context) // Access controller
+JamsScope.scopeControllerOf(context) // Access scope actions
+```
+
+### Expose as Scope aspect
+
+Need selective rebuilds? Expose individual state fields as aspects.
 
 ```dart
-/// {@template JamsScope}
-/// Scope for [JamsStateController].
-/// {@endtemplate}
-class JamsScope extends StatefulWidget {
-  /// {@macro JamsScope}
-  const JamsScope({required this.child, super.key});
-
-  /// Child widget.
-  final Widget child;
-
-  /// Returns current state (rebuilds on change).
-  static JamsState stateOf(BuildContext context) =>
-      controllerOf(context, listen: true).value;
-
-  /// Returns controller for calling methods.
-  static JamsStateController controllerOf(BuildContext context, {bool listen = false}) {
-    final inherited = listen
-        ? context.dependOnInheritedWidgetOfExactType<_JamsScopeInherited>()
-        : context.getInheritedWidgetOfExactType<_JamsScopeInherited>();
-    if (inherited == null) {
-      throw StateError('JamsScope not found in context');
-    }
-    return inherited.notifier!;
-  }
-
-  @override
-  State<JamsScope> createState() => _JamsScopeState();
-}
-
-class _JamsScopeState extends State<JamsScope> {
-  late final JamsStateController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = JamsStateController(/* TODO: add dependencies */);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) =>
-      _JamsScopeInherited(notifier: _controller, child: widget.child);
-}
-
-class _JamsScopeInherited extends InheritedNotifier<JamsStateController> {
-  const _JamsScopeInherited({required super.notifier, required super.child});
+final class JamsState {
+  final bool isPlaying;  // ← Cursor here, Cmd+.
+  final Track? track;
 }
 ```
+
+**Adds:**
+```dart
+JamsScope.isPlayingOf(context)  // Rebuilds ONLY when isPlaying changes
+```
+
+No data duplication — uses existing state, just smarter comparison.
 
 ## Supported Controllers
 
-The plugin recognizes classes extending:
+Works with any `Listenable`:
 
-- `Listenable`
-- `ValueListenable<T>`
-- `ChangeNotifier`
 - `ValueNotifier<T>`
-- Any custom subclass of the above
+- `ChangeNotifier`
+- `StateController<T>` (package:control)
+- Custom subclasses
 
-## Name Derivation
+## File Organization
 
-| Controller Name | Generated Scope |
-|-----------------|-----------------|
-| `JamsStateController` | `JamsScope` |
-| `AuthController` | `AuthScope` |
-| `UserNotifier` | `UserScope` |
-| `ThemeListenable` | `ThemeScope` |
+Put files anywhere in your feature folder:
+
+```
+lib/features/jams/
+├── controllers/
+│   └── jams_state_controller.dart  ← Controller here
+├── widgets/
+│   └── jams_scope.dart             ← Scope here (auto-detected)
+└── jams_screen.dart
+```
+
+The plugin searches recursively within `lib/features/xxx/` or `lib/xxx/`.
+
+## Generated Pattern
+
+Uses `InheritedModel` with aspects for selective rebuilds:
+
+```dart
+// Full state — rebuilds on ANY change
+final state = JamsScope.stateOf(context);
+
+// Specific field — rebuilds only when that field changes
+final isPlaying = JamsScope.isPlayingOf(context);
+```
 
 ## Requirements
 
-- Dart SDK: `>=3.10.0`
-- Flutter: `>=3.38.0`
-
-## License
-
-MIT
+- Dart `>=3.10` / Flutter `>=3.38` (analysis_server_plugin support)
