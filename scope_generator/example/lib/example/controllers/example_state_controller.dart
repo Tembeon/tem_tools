@@ -1,4 +1,15 @@
 import 'package:control/control.dart';
+import 'package:flutter/foundation.dart';
+
+/// Test class that directly extends ChangeNotifier
+class SimpleController extends ChangeNotifier {
+  int _value = 0;
+  int get value => _value;
+  void increment() {
+    _value++;
+    notifyListeners();
+  }
+}
 
 enum StateType { idle, loading, error }
 

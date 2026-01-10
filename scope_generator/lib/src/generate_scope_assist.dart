@@ -19,7 +19,7 @@ import 'package:scope_generator/src/scope_template.dart';
 /// - `*_scope_controller.dart` - IScopeController interface
 class GenerateScopeAssist extends ResolvedCorrectionProducer {
   static const _assistKind = AssistKind(
-    'scope_generator.generateScope',
+    'dart.assist.scope_generator.generateScope',
     30,
     'Generate Scope wrapper',
   );

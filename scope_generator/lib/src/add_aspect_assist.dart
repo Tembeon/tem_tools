@@ -17,7 +17,7 @@ import 'package:analyzer_plugin/utilities/change_builder/change_builder_core.dar
 /// Does NOT duplicate the field in InheritedModel - uses existing state object.
 class AddAspectAssist extends ResolvedCorrectionProducer {
   static const _assistKind = AssistKind(
-    'scope_generator.addAspect',
+    'dart.assist.scope_generator.addAspect',
     30,
     'Expose as Scope aspect',
   );
