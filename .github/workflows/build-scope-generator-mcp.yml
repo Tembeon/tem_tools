@@ -1,0 +1,79 @@
+name: Build scope_generator_mcp
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            output: scope_generator_mcp-linux
+          - os: macos-latest
+            output: scope_generator_mcp-macos
+          - os: windows-latest
+            output: scope_generator_mcp-windows.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Get dependencies
+        working-directory: scope_generator_mcp
+        run: dart pub get
+
+      - name: Analyze
+        working-directory: scope_generator_mcp
+        run: dart analyze
+
+      - name: Compile
+        working-directory: scope_generator_mcp
+        run: dart compile exe bin/scope_generator_mcp.dart -o ${{ matrix.output }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: scope_generator_mcp/${{ matrix.output }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scope_generator_mcp-linux
+          path: artifacts/
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scope_generator_mcp-macos
+          path: artifacts/
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scope_generator_mcp-windows.exe
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/scope_generator_mcp-linux
+            artifacts/scope_generator_mcp-macos
+            artifacts/scope_generator_mcp-windows.exe
+          generate_release_notes: true
