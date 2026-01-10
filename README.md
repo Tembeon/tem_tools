@@ -1,18 +1,13 @@
-# Overview
+# tem_tools
 
-This monorepo contains my set of lightweight, focused packages that solve specific problems without unnecessary
-dependencies. Each tool is designed to be:
+Dart/Flutter utilities.
 
-- **Independent** - can be used standalone or together
-- **Lightweight** - minimal dependencies and overhead
-- **Native** - follow Dart & Flutter practices
-- **Type-safe** - leveraging Dart's type system for safety
-- **Well-documented** - comprehensive examples and API docs
+## Packages
 
-## Available Tools
-
-| Tool                               | Description                                                                                                            | Updated     |
-|------------------------------------|------------------------------------------------------------------------------------------------------------------------|-------------|
-| [json](json)                       | Type-safe JSON parsing class that provides convenient methods for accessing and transforming JSON data.                | Dec 3, 2025 |
-| [copy](copy)                       | Package that simplifies the copyWith pattern for immutable state objects, eliminating boilerplate for nullable fields. | Dec 3, 2025 |
-| [http_middleware](http_middleware) | HTTP middleware system for `http` package that enables powerful request/response interception patterns                 | Dec 3, 2025 |
+| Package | Description |
+|---------|-------------|
+| [json](json) | Type-safe JSON parsing with path traversal (`user.profile.name`) |
+| [copy](copy) | `copyWith` that can set nullable fields to null |
+| [http_middleware](http_middleware) | Middleware chain for `http` with SWR caching |
+| [scope_generator](scope_generator) | Analyzer plugin — generates Scope boilerplate via Quick Actions |
+| [scope_generator_mcp](scope_generator_mcp) | MCP server for scope_generator (Claude integration) |
