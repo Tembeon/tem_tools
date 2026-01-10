@@ -1,0 +1,17 @@
+name: scope_generator_mcp
+version: 1.0.0
+description: MCP server for scope_generator plugin.
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+
+dependencies:
+  mcp_dart: ^1.2.1
+  json_rpc_2: ^3.0.2
+  stream_channel: ^2.1.2
+
+executables:
+  scope_generator_mcp: scope_generator_mcp
+
+dev_dependencies:
+  lints: ^6.0.0

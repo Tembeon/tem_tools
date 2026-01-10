@@ -1,0 +1,14 @@
+# Dart
+.dart_tool/
+.packages
+pubspec.lock
+
+# Compiled executable
+dart_mcp
+dart_mcp-*
+*.exe
+
+# IDE
+.idea/
+*.iml
+.vscode/
