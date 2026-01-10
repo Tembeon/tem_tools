@@ -8,6 +8,8 @@ MCP server for [scope_generator](../scope_generator). Lets Claude generate Scope
 dart compile exe bin/scope_generator_mcp.dart -o scope_generator_mcp
 ```
 
+or download from Release page.
+
 ## Setup
 
 **~/.claude/mcp.json:**
@@ -31,7 +33,7 @@ plugins:
     git:
       url: https://github.com/Tembeon/tem_tools.git
       path: scope_generator
-      ref: 2025.01.09
+      ref: 26.01.10
 ```
 
 ## Tools
