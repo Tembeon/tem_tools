@@ -70,21 +70,44 @@ import 'middleware_response.dart';
 ///   middlewares: [LoggingMiddleware()],
 /// );
 /// ```
+///
+/// ## Background Client
+///
+/// By default, background continuations (e.g., SWR revalidation) use the same
+/// [inner] client as foreground requests, sharing the connection pool.
+///
+/// To isolate background traffic, provide a separate [backgroundInner]:
+///
+/// ```dart
+/// final client = MiddlewareClient(
+///   inner: IOClient(),
+///   backgroundInner: IOClient(), // separate connection pool
+///   middlewares: [SwrMiddleware(cache: cache)],
+/// );
+/// ```
 class MiddlewareClient extends http.BaseClient {
   /// Creates a middleware client.
   ///
-  /// [inner] is the underlying HTTP client used for actual network requests.
+  /// [inner] is the underlying HTTP client used for foreground network requests.
   /// If not provided, a default [http.Client] is created.
+  ///
+  /// [backgroundInner] is an optional separate HTTP client used for background
+  /// continuations (e.g., SWR revalidation). When provided, background requests
+  /// use their own connection pool and won't compete with foreground requests.
+  /// If not provided, [inner] is used for both.
   ///
   /// [middlewares] is the list of middlewares to apply to each request.
   /// Middlewares are executed in the order provided.
   MiddlewareClient({
     http.Client? inner,
+    http.Client? backgroundInner,
     List<HttpMiddleware> middlewares = const [],
   }) : _inner = inner ?? http.Client(),
+       _backgroundInner = backgroundInner,
        _middlewares = List.unmodifiable(middlewares);
 
   final http.Client _inner;
+  final http.Client? _backgroundInner;
   final List<HttpMiddleware> _middlewares;
 
   @override
@@ -103,10 +126,18 @@ class MiddlewareClient extends http.BaseClient {
   }
 
   /// Builds and executes the middleware chain.
-  Future<MiddlewareResponse> _buildChain(MiddlewareContext context) {
+  ///
+  /// If [client] is provided, it overrides the default [_inner] client
+  /// for the terminal network request.
+  Future<MiddlewareResponse> _buildChain(
+    MiddlewareContext context, {
+    http.Client? client,
+  }) {
+    final effectiveClient = client ?? _inner;
+
     // Terminal handler: makes the actual HTTP request
     Future<MiddlewareResponse> terminal(MiddlewareContext ctx) async {
-      final response = await _inner.send(ctx.request);
+      final response = await effectiveClient.send(ctx.request);
       return MiddlewareResponse.immediate(response);
     }
 
@@ -135,8 +166,11 @@ class MiddlewareClient extends http.BaseClient {
     // Using unawaited Future to ensure it's scheduled properly
     Future(() async {
       try {
-        // Execute the full middleware chain
-        final response = await _buildChain(context);
+        // Execute the full middleware chain using the background client
+        final response = await _buildChain(
+          context,
+          client: _backgroundInner,
+        );
 
         // Drain the response stream to prevent resource leaks
         await response.response.stream.drain<void>();
@@ -154,5 +188,8 @@ class MiddlewareClient extends http.BaseClient {
   }
 
   @override
-  void close() => _inner.close();
+  void close() {
+    _inner.close();
+    _backgroundInner?.close();
+  }
 }
