@@ -1,0 +1,7 @@
+{
+  "name": "flutter-3-44-update",
+  "version": "0.1.0",
+  "description": "Flutter 3.44 / Dart 3.12 release reference and migration workflow.",
+  "author": { "name": "tembeon" },
+  "keywords": ["flutter", "dart", "3.44", "3.12", "migration", "release-notes"]
+}

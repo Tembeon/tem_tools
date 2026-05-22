@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "tem-tools",
+  "version": "0.1.0",
+  "description": "Personal Claude Code plugins for Flutter/Dart workflows. Each plugin scopes one concrete topic (one Flutter SDK release, one tooling area). Plugins are independent and optional.",
+  "owner": {
+    "name": "tembeon"
+  },
+  "plugins": [
+    {
+      "name": "flutter-3-44-update",
+      "description": "Reference and migration guidance for the Flutter 3.44 / Dart 3.12 release. Covers new language syntax, new widgets and APIs, and the upgrade workflow (AGP 9.0 / KGP removal, Swift Package Manager, UIScene, deprecated API replacements).",
+      "source": "./plugins/flutter-3-44-update",
+      "category": "flutter"
+    }
+  ]
+}
