@@ -23,6 +23,6 @@ Personal marketplace of Claude Code plugins covering Dart/Flutter workflows.
 Install in a Claude Code session:
 
 ```
-/plugin marketplace add /Users/tembeon/IdeaProjects/tem_tools
+/plugin marketplace add Tembeon/tem_tools
 /plugin install flutter-3-44-update@tem-tools
 ```
