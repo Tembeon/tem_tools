@@ -50,8 +50,16 @@ final class ProfileState {
   bool get isLoading => stateType == ProfileStateType.loading;
   bool get hasError => stateType == ProfileStateType.error;
 
-  // CRITICAL: use a ternary, not `?.call() ?? this.x` - the ?? form makes
-  // it impossible to set a nullable field back to null.
+  // CRITICAL: never `?.call() ?? this.x` - the ?? form makes it impossible
+  // to set a nullable field back to null. Two correct forms:
+  //
+  // 1. With package:copy (preferred when available) - import
+  //    'package:copy/copy.dart' INSTEAD of foundation.dart (copy exports
+  //    ValueGetter too, and in Flutter builds it IS Flutter's ValueGetter):
+  //      stateType: stateType.or(this.stateType),
+  //      error: error.or(this.error),
+  //
+  // 2. Zero-dependency ternary:
   ProfileState copyWith({
     ValueGetter<ProfileStateType>? stateType,
     ValueGetter<Object?>? error,
@@ -190,6 +198,19 @@ Non-negotiable requirements:
 - No `SingleChildScrollView` - use `CustomScrollView` + `SliverFillRemaining`.
 - Handle loading / error / data states; localize user-facing strings if the project has localization.
 
+## Companion packages (optional, from the same tem_tools ecosystem)
+
+None of these are required, but when the project uses them, prefer them:
+
+- **copy** - `or()` sugar for the copyWith pattern above; also resolves the
+  ValueGetter name for both Flutter and pure Dart.
+- **json** - typed manual parsing inside `load()`:
+  `final profile = Profile.fromJson(Json.decode(response.body));`
+- **http_middleware** - its streamed SWR maps directly onto this pattern:
+  subscribe to `client.watchGet(uri)` in the controller and `setState` per
+  event - the UI gets the cached state instantly and the fresh state when
+  revalidation lands. Details live in the `http-middleware` plugin skill.
+
 ## Review shortcuts
 
-When reviewing, check in this order: InheritedModel used? `_Aspect` enum exists? `updateShouldNotifyDependent` with switch? accessors pass `aspect:` and have `listen` with correct defaults? State has `==`/`hashCode` over all fields? copyWith uses ternary (not `?? `)?
+When reviewing, check in this order: InheritedModel used? `_Aspect` enum exists? `updateShouldNotifyDependent` with switch? accessors pass `aspect:` and have `listen` with correct defaults? State has `==`/`hashCode` over all fields? copyWith uses `or()` from package:copy or a ternary - never `?.call() ?? `?

@@ -27,7 +27,13 @@ You are a feature scaffolding agent for Flutter projects using the scope-based a
 
 1. Read `pubspec.yaml` and take the package name from `name:` - all imports are `package:<name>/...`, never relative.
 2. Verify `control` is a dependency. If it is missing, STOP and report that the pattern requires `package:control`.
-3. Glob an existing feature (`lib/features/*/widgets/*_scope.dart`) and skim it: if the project has established deviations from the templates below (different directory layout, a shared UI kit for progress/buttons, localization), follow the project, not the template.
+3. Check whether `copy` is a dependency. If yes, generate copyWith with its `or()` sugar and import `package:copy/copy.dart` INSTEAD of `package:flutter/foundation.dart` in the controller (copy exports `ValueGetter`, and importing only one source avoids the analyzer's ambiguous_import):
+   ```dart
+   stateType: stateType.or(this.stateType),
+   error: error.or(this.error),
+   ```
+   If `copy` is absent, use the ternary form from the template below as-is.
+4. Glob an existing feature (`lib/features/*/widgets/*_scope.dart`) and skim it: if the project has established deviations from the templates below (different directory layout, a shared UI kit for progress/buttons, localization), follow the project, not the template.
 
 Name conversions: directory and files `snake_case`, class prefix `PascalCase`.
 
@@ -60,7 +66,8 @@ final class <Feature>State {
   bool get isIdle => stateType == <Feature>StateType.idle;
 
   // Ternary on purpose: `error?.call() ?? this.error` would make it
-  // impossible to reset a nullable field to null.
+  // impossible to reset a nullable field to null. With package:copy in
+  // the project, use `error.or(this.error)` instead (see step 3 above).
   <Feature>State copyWith({
     ValueGetter<<Feature>StateType>? stateType,
     ValueGetter<Object?>? error,

@@ -42,11 +42,12 @@ The full pattern is required when a feature loads data, has loading/error/loaded
 ### State class
 
 - [ ] `final class`, `const` constructor, all fields `final`
-- [ ] `copyWith` uses `ValueGetter<T>?` with a TERNARY:
+- [ ] `copyWith` uses `ValueGetter<T>?` with one of the two correct forms - both are compliant:
   ```dart
-  data: data != null ? data() : this.data,
+  data: data != null ? data() : this.data,   // zero-dependency ternary
+  data: data.or(this.data),                  // or() from package:copy
   ```
-  The `data?.call() ?? this.data` form is a BUG for nullable fields - it silently ignores `data: () => null`. Flag it as critical.
+  The `data?.call() ?? this.data` form is a BUG for nullable fields - it silently ignores `data: () => null`. Flag it as critical. Do NOT flag `or()` as a deviation.
 - [ ] `==` and `hashCode` present and cover ALL fields symmetrically (aspect rebuilds compare states; a missed field means stale UI). List fields: `listEquals` in `==`, `Object.hashAll` in `hashCode`.
 - [ ] Has `stateType` or equivalent getters (`isLoading`, `hasError`)
 
@@ -74,7 +75,7 @@ The full pattern is required when a feature loads data, has loading/error/loaded
 
 ## Severity guide
 
-Critical: InheritedWidget instead of InheritedModel; missing `_Aspect` enum; missing `updateShouldNotifyDependent`; accessors without `aspect:`; `?? ` copyWith on nullable fields; missing `==`/`hashCode` or a field missed in them.
+Critical: InheritedWidget instead of InheritedModel; missing `_Aspect` enum; missing `updateShouldNotifyDependent`; accessors without `aspect:`; `?.call() ?? ` copyWith on nullable fields; missing `==`/`hashCode` or a field missed in them.
 Warning: wrong `listen` defaults; `of()` without the listen:false path; missing `copyWith`; SingleChildScrollView.
 Suggestion: hardcoded strings, missing dartdoc.
 
