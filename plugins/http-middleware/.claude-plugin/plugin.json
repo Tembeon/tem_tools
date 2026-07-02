@@ -1,0 +1,7 @@
+{
+  "name": "http-middleware",
+  "version": "2.0.0",
+  "description": "Usage guide for the http_middleware Dart package: composable middleware for package:http with SWR caching, streamed SWR, dedup, retries, circuit breaker.",
+  "author": { "name": "tembeon" },
+  "keywords": ["dart", "flutter", "http", "middleware", "swr", "cache", "retry", "circuit-breaker"]
+}

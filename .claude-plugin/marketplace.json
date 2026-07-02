@@ -12,6 +12,12 @@
       "description": "Reference and migration guidance for the Flutter 3.44 / Dart 3.12 release. Covers new language syntax, new widgets and APIs, and the upgrade workflow (AGP 9.0 / KGP removal, Swift Package Manager, UIScene, deprecated API replacements).",
       "source": "./plugins/flutter-3-44-update",
       "category": "flutter"
+    },
+    {
+      "name": "http-middleware",
+      "description": "Usage guide for the http_middleware Dart package: composable middleware chain over package:http with SWR caching (Future and Stream modes), request deduplication, retries, circuit breaker, timeouts and header injection. Answers install, composition and custom-middleware questions without reading the package sources.",
+      "source": "./plugins/http-middleware",
+      "category": "dart"
     }
   ]
 }
