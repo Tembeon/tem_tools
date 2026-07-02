@@ -6,9 +6,9 @@ Dart/Flutter utilities.
 
 | Tool | Description | Updated at |
 |---------|-------------|------------|
-| [json](json) | Type-safe JSON parsing with path traversal (`user.profile.name`) | 25.12.03 |
-| [copy](copy) | `copyWith` that can set nullable fields to null | 25.12.03 |
-| [http_middleware](http_middleware) | Middleware chain for `http` | 25.12.03 |
+| [json](json) | Type-safe JSON parsing with path traversal (`user.profile.name`) | 26.07.02 |
+| [copy](copy) | `copyWith` that can set nullable fields to null | 26.07.02 |
+| [http_middleware](http_middleware) | Middleware chain for `http` with SWR caching, dedup, retry, circuit breaker | 26.07.02 |
 
 ## Claude Code marketplace
 
