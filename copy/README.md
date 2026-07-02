@@ -126,10 +126,21 @@ void main() {
 ## Flutter interop
 
 Flutter's `foundation.dart` declares its own `ValueGetter`, so importing both
-Flutter and this package makes the name ambiguous. A conditional import
-("use Flutter's if available") is not possible in Dart: pub dependencies are
-unconditional, so a pure Dart package cannot reference `package:flutter` in
-any branch without becoming Flutter-only.
+Flutter and this package makes the name ambiguous.
+
+Why not a conditional import ("use Flutter's ValueGetter when available")?
+Dart's conditional imports (`if (dart.library.ui)`) do detect Flutter, but
+they only switch between files of this package - they cannot pull in
+`package:flutter`:
+
+- conditions test `dart:*` library availability; any branch referencing
+  `package:flutter` still requires an unconditional `flutter:` dependency,
+  making the package Flutter-only (pub has no optional dependencies);
+- Flutter's `ValueGetter` lives in `package:flutter/foundation.dart`, not in
+  `dart:ui`, so there is nothing to re-export from the detected SDK library;
+- all conditional branches [must expose the same API](https://dart.dev/tools/pub/create-packages#conditionally-importing-and-exporting-library-files)
+  (the analyzer always resolves the default branch), so the package cannot
+  export different names per platform either.
 
 It is also unnecessary. Dart typedefs are structural - both `ValueGetter`s
 are the same type `T Function()`, and the `or()` extension is declared on the
