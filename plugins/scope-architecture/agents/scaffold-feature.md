@@ -17,7 +17,13 @@ description: |
   <example>
   user: "Add a settings screen with state management"
   assistant: "I'll scaffold the settings feature first, then customize it."
+  <commentary>
+  New screen with state management = new feature. Scaffold first, then adapt.
+  </commentary>
   </example>
+
+  Do NOT use for projects built on bloc, riverpod, provider or getx - scaffold
+  with their own tooling instead.
 tools: ["Write", "Bash", "Read", "Glob"]
 ---
 
@@ -26,13 +32,13 @@ You are a feature scaffolding agent for Flutter projects using the scope-based a
 ## Before writing anything
 
 1. Read `pubspec.yaml` and take the package name from `name:` - all imports are `package:<name>/...`, never relative.
-2. Verify `control` is a dependency. If it is missing, STOP and report that the pattern requires `package:control`.
-3. Check whether `copy` is a dependency. If yes, generate copyWith with its `or()` sugar and import `package:copy/copy.dart` INSTEAD of `package:flutter/foundation.dart` in the controller (copy exports `ValueGetter`, and importing only one source avoids the analyzer's ambiguous_import):
+2. Check whether `control` is a dependency. The templates below use it. If it is absent, do NOT stop - the pattern's contract is "any Listenable owning immutable state": adapt the controller to a plain `ChangeNotifier` (private `_state` field, public `state` getter, `notifyListeners()` after each change) and replace `StateConsumer` in the Scope with `ListenableBuilder(listenable: controller, builder: ...)` reading `controller.state`.
+3. Check whether `copy` is a dependency. If yes, generate copyWith with its `or()` sugar:
    ```dart
    stateType: stateType.or(this.stateType),
    error: error.or(this.error),
    ```
-   If `copy` is absent, use the ternary form from the template below as-is.
+   importing it as `import 'package:copy/copy.dart' hide ValueGetter;` alongside `package:flutter/foundation.dart` - this keeps `listEquals` and other foundation symbols available with no ambiguous_import (see the use-copy skill). If `copy` is absent, use the ternary form from the template below as-is.
 4. Glob an existing feature (`lib/features/*/widgets/*_scope.dart`) and skim it: if the project has established deviations from the templates below (different directory layout, a shared UI kit for progress/buttons, localization), follow the project, not the template.
 
 Name conversions: directory and files `snake_case`, class prefix `PascalCase`.
@@ -290,6 +296,10 @@ class _<Feature>ScreenState extends State<<Feature>Screen> {
   }
 }
 ```
+
+## Verify
+
+After writing the files, run `dart analyze lib/features/<feature>/` and fix any reported errors (wrong imports, ambiguity, typos in placeholders) before reporting success. Include the analyze result in the report.
 
 ## Output
 

@@ -1,18 +1,18 @@
 ---
 name: scope-pattern
-description: This skill should be used when implementing or explaining the scope-based Flutter architecture (StateController from package:control + Scope widget with InheritedModel and aspects + Screen), when the user asks to "create a feature with scope pattern", "explain aspects in InheritedModel", "granular rebuilds without a state management package", "StateController conventions", or reviews/writes code in a lib/features/<name>/ structure with *_scope.dart and *_state_controller.dart files. Do NOT use for bloc, riverpod or provider architectures.
+description: This skill should be used when implementing or explaining the scope-based Flutter architecture (a Listenable controller such as StateController from package:control + Scope widget with InheritedModel and aspects + Screen), when the user asks to "create a feature with scope pattern", "explain aspects in InheritedModel", "granular rebuilds without a state management package", "my whole screen rebuilds when one field changes", "only rebuild the widget that uses a field", "StateController conventions", or reviews/writes code in a lib/features/<name>/ structure with *_scope.dart and *_state_controller.dart files. Do NOT use for bloc, riverpod or provider architectures.
 version: 1.0.0
 ---
 
 # Scope-based Flutter architecture
 
-A three-layer feature architecture built on `package:control` and Flutter's `InheritedModel`, without a heavyweight state management framework:
+A three-layer feature architecture built on Flutter's `InheritedModel`, without a heavyweight state management framework:
 
-1. **StateController** - pure Dart business logic emitting immutable states.
+1. **Controller** - any `Listenable` owning immutable state. `StateController` from `package:control` is the recommended implementation (handler mixins, setState discipline; its `IController implements Listenable`), but `ChangeNotifier` or `ValueNotifier<State>` satisfy the same contract - the Scope layer only needs "notifies + exposes current state".
 2. **Scope** - StatefulWidget exposing state and controller via `InheritedModel` with aspects for granular rebuilds.
 3. **Screen** - UI consuming the scope.
 
-Prerequisite: `control` package (`StateController`, `StateConsumer`, handler mixins).
+The examples below use `package:control`; with a plain `Listenable` controller replace `StateConsumer` with `ListenableBuilder` and read the state from the controller.
 
 ## When the full pattern applies
 
@@ -53,11 +53,13 @@ final class ProfileState {
   // CRITICAL: never `?.call() ?? this.x` - the ?? form makes it impossible
   // to set a nullable field back to null. Two correct forms:
   //
-  // 1. With package:copy (preferred when available) - import
-  //    'package:copy/copy.dart' INSTEAD of foundation.dart (copy exports
-  //    ValueGetter too, and in Flutter builds it IS Flutter's ValueGetter):
+  // 1. With package:copy (preferred when available):
   //      stateType: stateType.or(this.stateType),
   //      error: error.or(this.error),
+  //    Import it as `import 'package:copy/copy.dart' hide ValueGetter;`
+  //    alongside foundation.dart - keeps listEquals and other foundation
+  //    symbols available with no ambiguous_import (copy's ValueGetter is
+  //    interchangeable with Flutter's; details in the use-copy skill).
   //
   // 2. Zero-dependency ternary:
   ProfileState copyWith({
@@ -188,6 +190,7 @@ Non-negotiable requirements:
 - `InheritedModel`, NOT `InheritedWidget` - the latter loses granular rebuilds.
 - Private `_Aspect` enum, one value per exposed field.
 - `updateShouldNotifyDependent` with an exhaustive switch over aspects.
+- `updateShouldNotify` GATES `updateShouldNotifyDependent`: the framework runs the per-aspect check only after `updateShouldNotify` returns true. Keep it a superset of every field any aspect checks - a field missed there makes its dependents go stale silently.
 - `of()` takes `aspect` and `listen`; `listen: false` path uses `getElementForInheritedWidgetOfExactType` (safe in initState).
 - Static accessors: state defaults `listen: true`, controllers default `listen: false`.
 
