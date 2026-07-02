@@ -38,18 +38,36 @@ import 'dart:convert';
 ### Basic type inference
 
 ```dart
-final json = Json(jsonDecode(response.body));
+final json = Json.decode(response.body);
 
 String name = json('name');        // Automatic type inference
 int age = json('age');
 bool isActive = json('isActive');
 ```
 
+For a top-level JSON array use `Json.decodeList`:
+
+```dart
+final users = Json.decodeList(response.body).map(User.fromJson).toList();
+```
+
 ### With fallback values
+
+The fallback is used for missing keys AND wrong types:
 
 ```dart
 String email = json('email', fallback: () => 'no-email@example.com');
 int score = json('score', fallback: () => 0);
+```
+
+### Typed lists of primitives
+
+`json<List<String>>('tags')` always throws - `jsonDecode` produces
+`List<dynamic>`, which never matches a reified `List<String>`. Use `listOf`:
+
+```dart
+final tags = json.listOf<String>('tags');
+final scores = json.listOf<int>('scores', fallback: () => const []);
 ```
 
 ### Path traversal
@@ -82,6 +100,12 @@ final user = json.parseJson<User>('user', fromJson: User.fromJson);
 ```
 
 ### Parsing lists of objects
+
+```dart
+final users = json.parseList<User>('users', fromJson: User.fromJson);
+```
+
+`parseJsonList` is the whole-list variant when you need the full `List<Json>`:
 
 ```dart
 final users = json.parseJsonList<User>(

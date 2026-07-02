@@ -123,6 +123,27 @@ void main() {
 }
 ```
 
+## Flutter interop
+
+Flutter's `foundation.dart` declares its own `ValueGetter`, so importing both
+Flutter and this package makes the name ambiguous. A conditional import
+("use Flutter's if available") is not possible in Dart: pub dependencies are
+unconditional, so a pure Dart package cannot reference `package:flutter` in
+any branch without becoming Flutter-only.
+
+It is also unnecessary. Dart typedefs are structural - both `ValueGetter`s
+are the same type `T Function()`, and the `or()` extension is declared on the
+function type, not the name. In Flutter projects just hide this package's
+typedef and use Flutter's:
+
+```dart
+import 'package:copy/copy.dart' hide ValueGetter;
+import 'package:flutter/foundation.dart';
+
+// or() still works on Flutter's ValueGetter
+state.copyWith(data: () => null);
+```
+
 ## How it works
 
 The package provides a simple extension on nullable `ValueGetter<T>?`:

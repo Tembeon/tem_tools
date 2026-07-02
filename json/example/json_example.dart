@@ -1,5 +1,4 @@
 import 'package:json/json.dart';
-import 'dart:convert';
 
 const jsonString = '''
 {
@@ -70,18 +69,10 @@ class Project {
   final String name;
   final String status;
 
-  Project({
-    required this.id,
-    required this.name,
-    required this.status,
-  });
+  Project({required this.id, required this.name, required this.status});
 
   factory Project.fromJson(Json json) {
-    return Project(
-      id: json('id'),
-      name: json('name'),
-      status: json('status'),
-    );
+    return Project(id: json('id'), name: json('name'), status: json('status'));
   }
 
   @override
@@ -89,7 +80,7 @@ class Project {
 }
 
 void main() {
-  final json = Json(jsonDecode(jsonString));
+  final json = Json.decode(jsonString);
 
   print('=== Json Extension Type - All Features Demo ===\n');
 
@@ -116,20 +107,28 @@ void main() {
 
   // 3. Using parseJson() for nested objects
   print('3. parseJson() - Parse Nested Objects:');
-  final address = json.parseJson<Address>('address', fromJson: Address.fromJson);
+  final address = json.parseJson<Address>(
+    'address',
+    fromJson: Address.fromJson,
+  );
   print('   Address: $address\n');
 
-  // 4. Using parseJsonList() for arrays of objects
-  print('4. parseJsonList() - Parse Arrays of Objects:');
-  final projects = json.parseJsonList<Project>(
+  // 4. Using parseList() for arrays of objects
+  print('4. parseList() - Parse Arrays of Objects:');
+  final projects = json.parseList<Project>(
     'projects',
-    fromJson: (list) => list.map((j) => Project.fromJson(j)).toList(),
+    fromJson: Project.fromJson,
   );
   print('   Projects:');
   for (final project in projects) {
     print('     - $project');
   }
   print('');
+
+  // 4b. Typed primitive lists without the List<dynamic> trap
+  print('4b. listOf() - Typed Primitive Lists:');
+  final typedTags = json.listOf<String>('tags');
+  print('   Tags: $typedTags\n');
 
   // 5. Using path() with dot notation
   print('5. path() Method - Dot Notation:');
@@ -166,17 +165,17 @@ void main() {
     'nonexistent.field',
     fallback: () => 'Default Value',
   );
-  int missingAge = json.path<int>(
-    'address.age',
-    fallback: () => 0,
-  );
+  int missingAge = json.path<int>('address.age', fallback: () => 0);
   print('   Missing Field: $missingField');
   print('   Missing Age: $missingAge\n');
 
   // 9. Using path() with custom separator
   print('9. path() with Custom Separator:');
   String customPath = json.path<String>('address/city', separator: '/');
-  String customNestedPath = json.path<String>('skills/frameworks[0]', separator: '/');
+  String customNestedPath = json.path<String>(
+    'skills/frameworks[0]',
+    separator: '/',
+  );
   print('   City (using /): $customPath');
   print('   First Framework (using /): $customNestedPath\n');
 

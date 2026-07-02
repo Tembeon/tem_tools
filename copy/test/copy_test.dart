@@ -62,7 +62,11 @@ void main() {
       expect(updated2.data, isNull);
 
       // Test setting nullable field to null
-      final stateWithData = TestState(value: 10, name: 'test', data: 'some data');
+      final stateWithData = TestState(
+        value: 10,
+        name: 'test',
+        data: 'some data',
+      );
       final updated3 = stateWithData.copyWith(data: () => null);
       expect(updated3.data, isNull);
 
@@ -104,7 +108,40 @@ void main() {
       expect(callCount, equals(0));
     });
   });
+
+  group('Flutter interop', () {
+    // Dart typedefs are structural: Flutter's ValueGetter is also
+    // `T Function()`, so or() must apply to any identical typedef and to
+    // the bare function type. This is what makes
+    // `import 'package:copy/copy.dart' hide ValueGetter;` safe in Flutter.
+    test('or() applies to a foreign structurally identical typedef', () {
+      FlutterStyleValueGetter<int>? getter = () => 7;
+      expect(getter.or(0), equals(7));
+
+      FlutterStyleValueGetter<int>? nullGetter;
+      expect(nullGetter.or(3), equals(3));
+    });
+
+    test('or() applies to the bare function type', () {
+      int Function()? bare = () => 5;
+      expect(bare.or(0), equals(5));
+
+      int Function()? nullBare;
+      expect(nullBare.or(9), equals(9));
+    });
+
+    test('foreign typedef is assignable to ValueGetter and back', () {
+      FlutterStyleValueGetter<String> foreign = () => 'x';
+      ValueGetter<String> ours = foreign;
+      FlutterStyleValueGetter<String> roundTrip = ours;
+
+      expect(roundTrip(), equals('x'));
+    });
+  });
 }
+
+/// Simulates Flutter's `ValueGetter` from package:flutter/foundation.dart.
+typedef FlutterStyleValueGetter<T> = T Function();
 
 class Person {
   final String name;
@@ -129,20 +166,15 @@ class TestState {
   final String name;
   final String? data;
 
-  TestState({
-    required this.value,
-    required this.name,
-    this.data,
-  });
+  TestState({required this.value, required this.name, this.data});
 
   TestState copyWith({
     ValueGetter<int>? value,
     ValueGetter<String>? name,
     ValueGetter<String?>? data,
-  }) =>
-      TestState(
-        value: value.or(this.value),
-        name: name.or(this.name),
-        data: data.or(this.data),
-      );
+  }) => TestState(
+    value: value.or(this.value),
+    name: name.or(this.name),
+    data: data.or(this.data),
+  );
 }

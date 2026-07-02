@@ -26,11 +26,13 @@ void main() {
 
         expect(
           () => json<int>('id'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('Invalid type of key "id"'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid type of key "id"'),
+            ),
+          ),
         );
       });
 
@@ -43,10 +45,7 @@ void main() {
       test('should throw ArgumentError for missing key', () {
         final json = Json({'name': 'John'});
 
-        expect(
-          () => json<int>('id'),
-          throwsA(isA<ArgumentError>()),
-        );
+        expect(() => json<int>('id'), throwsA(isA<ArgumentError>()));
       });
 
       test('should use fallback for missing key', () {
@@ -59,7 +58,7 @@ void main() {
     group('parse() method', () {
       test('should parse custom object from json', () {
         final json = Json({
-          'user': {'id': 1, 'name': 'Alice'}
+          'user': {'id': 1, 'name': 'Alice'},
         });
 
         final user = json.parse<Json, User>(
@@ -83,28 +82,58 @@ void main() {
         );
       });
 
-      test('should throw when json type is invalid even with fallback', () {
+      test('should use fallback when json type is invalid', () {
         final json = Json({'user': 'invalid'});
 
-        // The call() method throws before fallback can be used
+        final user = json.parse<Json, User>(
+          'user',
+          fallback: () => User(0, 'Unknown'),
+          fromJson: (json) => User(json<int>('id'), json<String>('name')),
+        );
+
+        expect(user.id, equals(0));
+        expect(user.name, equals('Unknown'));
+      });
+
+      test('should use fallback for missing key', () {
+        final json = Json({'other': 1});
+
+        final user = json.parse<Json, User>(
+          'user',
+          fallback: () => User(-1, 'Missing'),
+          fromJson: (json) => User(json<int>('id'), json<String>('name')),
+        );
+
+        expect(user.id, equals(-1));
+      });
+
+      test('error message reports the offending value type', () {
+        final json = Json({'user': 'invalid'});
+
         expect(
           () => json.parse<Json, User>(
             'user',
-            fallback: () => User(0, 'Unknown'),
             fromJson: (json) => User(json<int>('id'), json<String>('name')),
           ),
-          throwsA(isA<ArgumentError>()),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('String'),
+            ),
+          ),
         );
       });
 
       test('should work with nested json objects', () {
         final json = Json({
-          'address': {'street': 'Main St', 'number': 123}
+          'address': {'street': 'Main St', 'number': 123},
         });
 
         final address = json.parse<Json, Address>(
           'address',
-          fromJson: (json) => Address(json<String>('street'), json<int>('number')),
+          fromJson: (json) =>
+              Address(json<String>('street'), json<int>('number')),
         );
 
         expect(address.street, equals('Main St'));
@@ -115,7 +144,7 @@ void main() {
     group('parseJson() method', () {
       test('should parse nested Json object', () {
         final json = Json({
-          'user': {'id': 42, 'name': 'Bob'}
+          'user': {'id': 42, 'name': 'Bob'},
         });
 
         final user = json.parseJson<User>(
@@ -139,25 +168,24 @@ void main() {
         );
       });
 
-      test('should throw for invalid type even with fallback', () {
+      test('should use fallback for invalid type', () {
         final json = Json({'user': 'not-a-json'});
 
-        // The call() method throws before fallback can be used
-        expect(
-          () => json.parseJson<User>(
-            'user',
-            fallback: () => User(-1, 'Default'),
-            fromJson: (json) => User(json('id'), json('name')),
-          ),
-          throwsA(isA<ArgumentError>()),
+        final user = json.parseJson<User>(
+          'user',
+          fallback: () => User(-1, 'Default'),
+          fromJson: (json) => User(json('id'), json('name')),
         );
+
+        expect(user.id, equals(-1));
+        expect(user.name, equals('Default'));
       });
 
       test('should work with deeply nested Json', () {
         final json = Json({
           'data': {
-            'user': {'id': 100, 'name': 'Charlie'}
-          }
+            'user': {'id': 100, 'name': 'Charlie'},
+          },
         });
 
         final data = json.parseJson<DataWrapper>(
@@ -165,10 +193,7 @@ void main() {
           fromJson: (json) => DataWrapper(
             json.parseJson<User>(
               'user',
-              fromJson: (userJson) => User(
-                userJson('id'),
-                userJson('name'),
-              ),
+              fromJson: (userJson) => User(userJson('id'), userJson('name')),
             ),
           ),
         );
@@ -185,14 +210,13 @@ void main() {
             {'id': 1, 'name': 'Alice'},
             {'id': 2, 'name': 'Bob'},
             {'id': 3, 'name': 'Charlie'},
-          ]
+          ],
         });
 
         final users = json.parseJsonList<User>(
           'users',
-          fromJson: (jsonList) => jsonList
-              .map((json) => User(json('id'), json('name')))
-              .toList(),
+          fromJson: (jsonList) =>
+              jsonList.map((json) => User(json('id'), json('name'))).toList(),
         );
 
         expect(users.length, equals(3));
@@ -209,9 +233,8 @@ void main() {
 
         final users = json.parseJsonList<User>(
           'users',
-          fromJson: (jsonList) => jsonList
-              .map((json) => User(json('id'), json('name')))
-              .toList(),
+          fromJson: (jsonList) =>
+              jsonList.map((json) => User(json('id'), json('name'))).toList(),
         );
 
         expect(users, isEmpty);
@@ -223,32 +246,69 @@ void main() {
         expect(
           () => json.parseJsonList<User>(
             'users',
-            fromJson: (jsonList) => jsonList
-                .map((json) => User(json('id'), json('name')))
-                .toList(),
+            fromJson: (jsonList) =>
+                jsonList.map((json) => User(json('id'), json('name'))).toList(),
           ),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('expected List<Object?>'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('expected List'),
+            ),
+          ),
         );
       });
 
-      test('should throw for invalid type even with fallback', () {
+      test('should use fallback for invalid type', () {
         final json = Json({'users': 'not-a-list'});
 
-        // The call() method throws before fallback can be used
+        final users = json.parseJsonList<User>(
+          'users',
+          fallback: () => <User>[],
+          fromJson: (jsonList) =>
+              jsonList.map((json) => User(json('id'), json('name'))).toList(),
+        );
+
+        expect(users, isEmpty);
+      });
+
+      test('should throw clear error for non-object elements', () {
+        final json = Json({
+          'users': [1, 2, 3],
+        });
+
         expect(
           () => json.parseJsonList<User>(
             'users',
-            fallback: () => <User>[],
-            fromJson: (jsonList) => jsonList
-                .map((json) => User(json('id'), json('name')))
-                .toList(),
+            fromJson: (jsonList) =>
+                jsonList.map((json) => User(json('id'), json('name'))).toList(),
           ),
-          throwsA(isA<ArgumentError>()),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('users[0]'),
+            ),
+          ),
         );
+      });
+
+      test('should use fallback for non-object elements', () {
+        final json = Json({
+          'users': [
+            {'id': 1, 'name': 'Alice'},
+            null,
+          ],
+        });
+
+        final users = json.parseJsonList<User>(
+          'users',
+          fallback: () => <User>[],
+          fromJson: (jsonList) =>
+              jsonList.map((json) => User(json('id'), json('name'))).toList(),
+        );
+
+        expect(users, isEmpty);
       });
 
       test('should parse complex nested structures', () {
@@ -259,32 +319,34 @@ void main() {
               'members': [
                 {'id': 1, 'name': 'Alice'},
                 {'id': 2, 'name': 'Bob'},
-              ]
+              ],
             },
             {
               'name': 'Team B',
               'members': [
                 {'id': 3, 'name': 'Charlie'},
-              ]
+              ],
             },
-          ]
+          ],
         });
 
         final teams = json.parseJsonList<Team>(
           'teams',
           fromJson: (jsonList) => jsonList
-              .map((json) => Team(
-                    json('name'),
-                    json.parseJsonList<User>(
-                      'members',
-                      fromJson: (membersList) => membersList
-                          .map((memberJson) => User(
-                                memberJson('id'),
-                                memberJson('name'),
-                              ))
-                          .toList(),
-                    ),
-                  ))
+              .map(
+                (json) => Team(
+                  json('name'),
+                  json.parseJsonList<User>(
+                    'members',
+                    fromJson: (membersList) => membersList
+                        .map(
+                          (memberJson) =>
+                              User(memberJson('id'), memberJson('name')),
+                        )
+                        .toList(),
+                  ),
+                ),
+              )
               .toList(),
         );
 
@@ -293,6 +355,163 @@ void main() {
         expect(teams[0].members.length, equals(2));
         expect(teams[1].name, equals('Team B'));
         expect(teams[1].members.length, equals(1));
+      });
+    });
+
+    group('decode() and decodeList()', () {
+      test('decode parses a JSON object string', () {
+        final json = Json.decode('{"id": 1, "name": "Test"}');
+
+        expect(json<int>('id'), equals(1));
+        expect(json<String>('name'), equals('Test'));
+      });
+
+      test('decode throws ArgumentError for a non-object top level', () {
+        expect(() => Json.decode('[1, 2]'), throwsA(isA<ArgumentError>()));
+        expect(() => Json.decode('"text"'), throwsA(isA<ArgumentError>()));
+      });
+
+      test('decode throws FormatException for malformed JSON', () {
+        expect(() => Json.decode('{oops'), throwsA(isA<FormatException>()));
+      });
+
+      test('decodeList parses a JSON array of objects', () {
+        final items = Json.decodeList('[{"id": 1}, {"id": 2}]');
+
+        expect(items, hasLength(2));
+        expect(items[0]<int>('id'), equals(1));
+        expect(items[1]<int>('id'), equals(2));
+      });
+
+      test('decodeList throws for non-array top level', () {
+        expect(
+          () => Json.decodeList('{"a": 1}'),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+
+      test('decodeList throws for non-object elements with index', () {
+        expect(
+          () => Json.decodeList('[{"id": 1}, 42]'),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('index 1'),
+            ),
+          ),
+        );
+      });
+    });
+
+    group('parseList() method', () {
+      test('should parse per-element with fromJson', () {
+        final json = Json({
+          'users': [
+            {'id': 1, 'name': 'Alice'},
+            {'id': 2, 'name': 'Bob'},
+          ],
+        });
+
+        final users = json.parseList<User>(
+          'users',
+          fromJson: (json) => User(json('id'), json('name')),
+        );
+
+        expect(users, hasLength(2));
+        expect(users[0].name, equals('Alice'));
+        expect(users[1].name, equals('Bob'));
+      });
+
+      test('should use fallback for missing key', () {
+        final json = Json({'other': 1});
+
+        final users = json.parseList<User>(
+          'users',
+          fallback: () => const [],
+          fromJson: (json) => User(json('id'), json('name')),
+        );
+
+        expect(users, isEmpty);
+      });
+
+      test('works with data straight from jsonDecode', () {
+        final json = Json.decode('{"users": [{"id": 7, "name": "Zoe"}]}');
+
+        final users = json.parseList<User>(
+          'users',
+          fromJson: (json) => User(json('id'), json('name')),
+        );
+
+        expect(users.single.id, equals(7));
+      });
+    });
+
+    group('listOf() method', () {
+      test('returns a typed list of primitives', () {
+        final json = Json({
+          'tags': ['a', 'b', 'c'],
+          'scores': [1, 2, 3],
+        });
+
+        expect(json.listOf<String>('tags'), equals(['a', 'b', 'c']));
+        expect(json.listOf<int>('scores'), equals([1, 2, 3]));
+      });
+
+      test('solves the List<dynamic> trap from jsonDecode', () {
+        final json = Json.decode('{"tags": ["dart", "flutter"]}');
+
+        // The naive call fails: jsonDecode produces List<dynamic>
+        expect(() => json<List<String>>('tags'), throwsA(isA<ArgumentError>()));
+
+        // listOf checks elements instead of the list's reified type
+        expect(json.listOf<String>('tags'), equals(['dart', 'flutter']));
+      });
+
+      test('supports nullable element types', () {
+        final json = Json({
+          'values': [1, null, 3],
+        });
+
+        expect(json.listOf<int?>('values'), equals([1, null, 3]));
+      });
+
+      test('throws with element index for wrong element type', () {
+        final json = Json({
+          'tags': ['a', 2, 'c'],
+        });
+
+        expect(
+          () => json.listOf<String>('tags'),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('tags[1]'),
+            ),
+          ),
+        );
+      });
+
+      test('uses fallback for wrong element type and missing key', () {
+        final json = Json({
+          'tags': ['a', 2],
+        });
+
+        expect(
+          json.listOf<String>('tags', fallback: () => const ['none']),
+          equals(['none']),
+        );
+        expect(
+          json.listOf<String>('missing', fallback: () => const []),
+          isEmpty,
+        );
+      });
+
+      test('returns empty list for empty array', () {
+        final json = Json({'tags': <Object?>[]});
+
+        expect(json.listOf<String>('tags'), isEmpty);
       });
     });
 
@@ -348,10 +567,7 @@ void main() {
     group('path() method', () {
       test('should traverse simple nested path', () {
         final json = Json({
-          'user': {
-            'name': 'Alice',
-            'age': 25,
-          }
+          'user': {'name': 'Alice', 'age': 25},
         });
 
         expect(json.path<String>('user.name'), equals('Alice'));
@@ -363,17 +579,20 @@ void main() {
           'data': {
             'user': {
               'profile': {
-                'personal': {
-                  'firstName': 'John',
-                  'lastName': 'Doe',
-                }
-              }
-            }
-          }
+                'personal': {'firstName': 'John', 'lastName': 'Doe'},
+              },
+            },
+          },
         });
 
-        expect(json.path<String>('data.user.profile.personal.firstName'), equals('John'));
-        expect(json.path<String>('data.user.profile.personal.lastName'), equals('Doe'));
+        expect(
+          json.path<String>('data.user.profile.personal.firstName'),
+          equals('John'),
+        );
+        expect(
+          json.path<String>('data.user.profile.personal.lastName'),
+          equals('Doe'),
+        );
       });
 
       test('should access array elements by index', () {
@@ -382,7 +601,7 @@ void main() {
             {'name': 'Alice', 'age': 25},
             {'name': 'Bob', 'age': 30},
             {'name': 'Charlie', 'age': 35},
-          ]
+          ],
         });
 
         expect(json.path<String>('users.0.name'), equals('Alice'));
@@ -397,7 +616,7 @@ void main() {
             [1, 2, 3],
             [4, 5, 6],
             [7, 8, 9],
-          ]
+          ],
         });
 
         expect(json.path<int>('matrix.0.0'), equals(1));
@@ -415,50 +634,68 @@ void main() {
                 'employees': [
                   {'name': 'Alice', 'role': 'Developer'},
                   {'name': 'Bob', 'role': 'Manager'},
-                ]
+                ],
               },
               {
                 'name': 'Sales',
                 'employees': [
                   {'name': 'Charlie', 'role': 'Sales Rep'},
-                ]
+                ],
               },
-            ]
-          }
+            ],
+          },
         });
 
         expect(json.path<String>('company.name'), equals('TechCorp'));
-        expect(json.path<String>('company.departments.0.name'), equals('Engineering'));
-        expect(json.path<String>('company.departments.0.employees.0.name'), equals('Alice'));
-        expect(json.path<String>('company.departments.0.employees.1.role'), equals('Manager'));
-        expect(json.path<String>('company.departments.1.employees.0.name'), equals('Charlie'));
+        expect(
+          json.path<String>('company.departments.0.name'),
+          equals('Engineering'),
+        );
+        expect(
+          json.path<String>('company.departments.0.employees.0.name'),
+          equals('Alice'),
+        );
+        expect(
+          json.path<String>('company.departments.0.employees.1.role'),
+          equals('Manager'),
+        );
+        expect(
+          json.path<String>('company.departments.1.employees.0.name'),
+          equals('Charlie'),
+        );
       });
 
       test('should use custom separator', () {
         final json = Json({
           'user': {
-            'profile': {
-              'name': 'Alice',
-            }
-          }
+            'profile': {'name': 'Alice'},
+          },
         });
 
-        expect(json.path<String>('user/profile/name', separator: '/'), equals('Alice'));
-        expect(json.path<String>('user->profile->name', separator: '->'), equals('Alice'));
+        expect(
+          json.path<String>('user/profile/name', separator: '/'),
+          equals('Alice'),
+        );
+        expect(
+          json.path<String>('user->profile->name', separator: '->'),
+          equals('Alice'),
+        );
       });
 
       test('should throw ArgumentError for invalid path', () {
         final json = Json({
-          'user': {'name': 'Alice'}
+          'user': {'name': 'Alice'},
         });
 
         expect(
           () => json.path<String>('user.missing.field'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('Path traversal failed'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('Path traversal failed'),
+            ),
+          ),
         );
       });
 
@@ -466,46 +703,52 @@ void main() {
         final json = Json({
           'users': [
             {'name': 'Alice'},
-          ]
+          ],
         });
 
         expect(
           () => json.path<String>('users.5.name'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('Invalid array index'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid array index'),
+            ),
+          ),
         );
 
         expect(
           () => json.path<String>('users.-1.name'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('Invalid array index'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid array index'),
+            ),
+          ),
         );
       });
 
       test('should throw ArgumentError for invalid type', () {
         final json = Json({
-          'user': {'name': 'Alice'}
+          'user': {'name': 'Alice'},
         });
 
         expect(
           () => json.path<int>('user.name'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('Invalid type'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('Invalid type'),
+            ),
+          ),
         );
       });
 
       test('should use fallback for missing path', () {
         final json = Json({
-          'user': {'name': 'Alice'}
+          'user': {'name': 'Alice'},
         });
 
         expect(
@@ -518,7 +761,7 @@ void main() {
         final json = Json({
           'users': [
             {'name': 'Alice'},
-          ]
+          ],
         });
 
         expect(
@@ -529,27 +772,24 @@ void main() {
 
       test('should use fallback for invalid type', () {
         final json = Json({
-          'user': {'age': '25'}
+          'user': {'age': '25'},
         });
 
-        expect(
-          json.path<int>('user.age', fallback: () => 0),
-          equals(0),
-        );
+        expect(json.path<int>('user.age', fallback: () => 0), equals(0));
       });
 
       test('should handle null values in path', () {
-        final json = Json({
-          'user': null,
-        });
+        final json = Json({'user': null});
 
         expect(
           () => json.path<String>('user.name'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('value is null'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('value is null'),
+            ),
+          ),
         );
 
         expect(
@@ -559,26 +799,23 @@ void main() {
       });
 
       test('should handle primitive values in middle of path', () {
-        final json = Json({
-          'user': 'Alice',
-        });
+        final json = Json({'user': 'Alice'});
 
         expect(
           () => json.path<String>('user.name'),
-          throwsA(isA<ArgumentError>().having(
-            (e) => e.message,
-            'message',
-            contains('expected Map or List'),
-          )),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('expected Map or List'),
+            ),
+          ),
         );
       });
 
       test('should support nullable types', () {
         final json = Json({
-          'user': {
-            'name': 'Alice',
-            'email': null,
-          }
+          'user': {'name': 'Alice', 'email': null},
         });
 
         expect(json.path<String>('user.name'), equals('Alice'));
@@ -590,7 +827,7 @@ void main() {
           'users': [
             {'name': 'Alice'},
             {'name': 'Bob'},
-          ]
+          ],
         });
 
         expect(json.path<String>('users[0].name'), equals('Alice'));
@@ -602,13 +839,13 @@ void main() {
           'data': {
             'items': [
               {
-                'tags': ['red', 'blue', 'green']
+                'tags': ['red', 'blue', 'green'],
               },
               {
-                'tags': ['yellow', 'purple']
-              }
-            ]
-          }
+                'tags': ['yellow', 'purple'],
+              },
+            ],
+          },
         });
 
         expect(json.path<String>('data.items[0].tags[0]'), equals('red'));
@@ -624,15 +861,12 @@ void main() {
               'friends': [
                 {'name': 'Bob'},
                 {'name': 'Charlie'},
-              ]
-            }
-          ]
+              ],
+            },
+          ],
         });
 
-        expect(
-          json.path<String>('users[0].friends[0].name'),
-          equals('Bob'),
-        );
+        expect(json.path<String>('users[0].friends[0].name'), equals('Bob'));
         expect(
           json.path<String>('users[0].friends[1].name'),
           equals('Charlie'),
@@ -645,11 +879,14 @@ void main() {
             'departments': [
               {
                 'employees': [
-                  {'name': 'Alice', 'skills': ['Dart', 'Flutter']},
-                ]
-              }
-            ]
-          }
+                  {
+                    'name': 'Alice',
+                    'skills': ['Dart', 'Flutter'],
+                  },
+                ],
+              },
+            ],
+          },
         });
 
         expect(
@@ -666,7 +903,7 @@ void main() {
         final json = Json({
           'users': [
             {'name': 'Alice', 'age': 25},
-          ]
+          ],
         });
 
         // Both should return the same value
@@ -680,7 +917,7 @@ void main() {
         final json = Json({
           'users': [
             {'name': 'Alice'},
-          ]
+          ],
         });
 
         expect(

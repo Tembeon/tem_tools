@@ -1,12 +1,12 @@
 name: copy
-description: Package that simplifies the `copyWith` pattern
-version: 1.0.0
-# repository: https://github.com/my_org/my_repo
+description: >-
+  Simplifies the copyWith pattern: ValueGetter-based updates that can
+  set nullable fields to null. Interoperable with Flutter's ValueGetter.
+version: 1.1.0
+repository: https://github.com/tembeon/tem_tools
 
 environment:
   sdk: '>=3.10.1 <4.0.0'
-
-dependencies:
 
 dev_dependencies:
   lints: ^6.0.0
