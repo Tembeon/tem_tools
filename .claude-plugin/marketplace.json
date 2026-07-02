@@ -18,6 +18,18 @@
       "description": "Usage guide for the http_middleware Dart package: composable middleware chain over package:http with SWR caching (Future and Stream modes), request deduplication, retries, circuit breaker, timeouts and header injection. Answers install, composition and custom-middleware questions without reading the package sources.",
       "source": "./plugins/http-middleware",
       "category": "dart"
+    },
+    {
+      "name": "copy",
+      "description": "Usage guide for the copy Dart package: ValueGetter-based copyWith that distinguishes 'don't update' from 'set to null', including the Flutter ValueGetter interop rules (conditional export, analyzer caveat, hide).",
+      "source": "./plugins/copy",
+      "category": "dart"
+    },
+    {
+      "name": "json",
+      "description": "Usage guide for the json Dart package: type-safe manual JSON parsing over an extension type - typed access with fallbacks, nested object/list parsing, path traversal, and the List<dynamic> trap solved by listOf.",
+      "source": "./plugins/json",
+      "category": "dart"
     }
   ]
 }

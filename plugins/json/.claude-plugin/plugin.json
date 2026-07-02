@@ -1,0 +1,7 @@
+{
+  "name": "json",
+  "version": "1.1.0",
+  "description": "Usage guide for the json Dart package: type-safe JSON parsing over an extension type with inferred access, fallbacks, nested parsing and path traversal.",
+  "author": { "name": "tembeon" },
+  "keywords": ["dart", "flutter", "json", "parsing", "extension-type", "type-safe"]
+}

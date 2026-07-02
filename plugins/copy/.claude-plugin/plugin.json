@@ -1,0 +1,7 @@
+{
+  "name": "copy",
+  "version": "1.1.0",
+  "description": "Usage guide for the copy Dart package: ValueGetter-based copyWith that can set nullable fields to null, with Flutter interop.",
+  "author": { "name": "tembeon" },
+  "keywords": ["dart", "flutter", "copywith", "valuegetter", "immutable", "nullable"]
+}

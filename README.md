@@ -18,6 +18,8 @@ Personal marketplace of Claude Code plugins covering Dart/Flutter workflows.
 |---------|-------------|------------|
 | [flutter-3-44-update](plugins/flutter-3-44-update) | Flutter 3.44 / Dart 3.12 reference + migration workflow | 26.05.22 |
 | [http-middleware](plugins/http-middleware) | Usage guide for the http_middleware package (SWR, dedup, retry, breaker) | 26.07.02 |
+| [copy](plugins/copy) | Usage guide for the copy package (nullable copyWith, Flutter interop) | 26.07.02 |
+| [json](plugins/json) | Usage guide for the json package (typed access, path traversal, listOf) | 26.07.02 |
 
 Install in a Claude Code session:
 
