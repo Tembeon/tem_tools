@@ -103,8 +103,8 @@ class DedupMiddleware extends HttpMiddleware {
   DedupMiddleware({
     DedupKeyGenerator? keyGenerator,
     ShouldDedupRequest? shouldDedup,
-  })  : keyGenerator = keyGenerator ?? _defaultKeyGenerator,
-        shouldDedup = shouldDedup ?? _defaultShouldDedup;
+  }) : keyGenerator = keyGenerator ?? _defaultKeyGenerator,
+       shouldDedup = shouldDedup ?? _defaultShouldDedup;
 
   /// Function to generate dedup keys.
   final DedupKeyGenerator keyGenerator;
@@ -151,8 +151,11 @@ class DedupMiddleware extends HttpMiddleware {
     if (existing != null) {
       // Wait for the existing request and share its response
       context.metadata['dedup:shared'] = true;
+      existing.waiters++;
       final cached = await existing.completer.future;
-      return MiddlewareResponse.immediate(cached.toStreamedResponse());
+      return MiddlewareResponse.immediate(
+        cached.toStreamedResponse(request: context.request),
+      );
     }
 
     // No existing request - start a new one
@@ -162,9 +165,16 @@ class DedupMiddleware extends HttpMiddleware {
     try {
       final response = await next(context);
 
-      // Cache the response body so it can be shared
-      final cached =
-          await CachedResponse.fromStreamedResponse(response.response);
+      // No one joined while the request was in flight: return the
+      // response as-is, preserving streaming and avoiding buffering.
+      if (inFlightRequest.waiters == 0) {
+        return response;
+      }
+
+      // Buffer the response body so it can be shared
+      final cached = await CachedResponse.fromStreamedResponse(
+        response.response,
+      );
 
       // Complete the in-flight tracker so waiting requests get the response
       inFlightRequest.completer.complete(cached);
@@ -173,12 +183,14 @@ class DedupMiddleware extends HttpMiddleware {
       // Handle background continuation if present
       if (response.hasBackgroundContinuation) {
         return MiddlewareResponse.withBackgroundContinuation(
-          response: cached.toStreamedResponse(),
+          response: cached.toStreamedResponse(request: context.request),
           backgroundContext: response.backgroundContext!,
         );
       }
 
-      return MiddlewareResponse.immediate(cached.toStreamedResponse());
+      return MiddlewareResponse.immediate(
+        cached.toStreamedResponse(request: context.request),
+      );
     } catch (e, st) {
       // Propagate the error to all waiting requests
       inFlightRequest.completer.completeError(e, st);
@@ -210,4 +222,9 @@ class _InFlightRequest {
 
   /// Completer that will complete when the request finishes.
   final Completer<CachedResponse> completer = Completer<CachedResponse>();
+
+  /// Number of requests waiting on [completer].
+  ///
+  /// When zero, the leader skips buffering and returns its response as-is.
+  int waiters = 0;
 }

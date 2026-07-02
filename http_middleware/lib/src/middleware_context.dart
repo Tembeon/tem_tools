@@ -33,10 +33,8 @@ class MiddlewareContext {
   ///
   /// [request] is the HTTP request being processed.
   /// [metadata] is an optional map for sharing data between middlewares.
-  MiddlewareContext({
-    required this.request,
-    Map<String, dynamic>? metadata,
-  }) : metadata = metadata ?? {};
+  MiddlewareContext({required this.request, Map<String, Object?>? metadata})
+    : metadata = metadata ?? {};
 
   /// The HTTP request being processed through the middleware chain.
   final http.BaseRequest request;
@@ -50,7 +48,7 @@ class MiddlewareContext {
   /// Common internal keys:
   /// - `_isBackground`: true if this is a background revalidation request
   /// - `_isFromCache`: true if the response was served from cache
-  final Map<String, dynamic> metadata;
+  final Map<String, Object?> metadata;
 
   /// Returns true if the response was served from cache.
   ///
@@ -84,11 +82,11 @@ class MiddlewareContext {
   /// the metadata, or when forking the context for background operations.
   MiddlewareContext copyWith({
     http.BaseRequest? request,
-    Map<String, dynamic>? metadata,
+    Map<String, Object?>? metadata,
   }) {
     return MiddlewareContext(
       request: request ?? this.request,
-      metadata: metadata ?? Map<String, dynamic>.from(this.metadata),
+      metadata: metadata ?? Map<String, Object?>.from(this.metadata),
     );
   }
 
@@ -100,7 +98,8 @@ class MiddlewareContext {
   ///
   /// The cloned context will have:
   /// - A fresh copy of the request (can be sent to the network)
-  /// - A shallow copy of the metadata
+  /// - A shallow copy of the metadata, minus the `_isFromCache` flag
+  ///   (the background response has not been served from cache)
   ///
   /// Example:
   /// ```dart
@@ -112,13 +111,19 @@ class MiddlewareContext {
   /// ```
   MiddlewareContext copyForBackground() {
     return MiddlewareContext(
-      request: _cloneRequest(request),
-      metadata: Map<String, dynamic>.from(metadata),
+      request: cloneRequest(request),
+      metadata: Map<String, Object?>.from(metadata)..remove('_isFromCache'),
     );
   }
 
   /// Clones an HTTP request so it can be sent again.
-  static http.BaseRequest _cloneRequest(http.BaseRequest original) {
+  ///
+  /// A [http.BaseRequest] can only be sent once, so middlewares that
+  /// resend a request (retries, background revalidation) must clone it first.
+  ///
+  /// Throws [UnsupportedError] for [http.StreamedRequest] and unknown
+  /// request types, whose body streams can only be read once.
+  static http.BaseRequest cloneRequest(http.BaseRequest original) {
     if (original is http.Request) {
       final clone = http.Request(original.method, original.url)
         ..headers.addAll(original.headers)

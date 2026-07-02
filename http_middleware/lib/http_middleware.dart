@@ -59,8 +59,14 @@ export 'src/http_middleware.dart';
 export 'src/http_middleware_client.dart';
 export 'src/middleware_context.dart';
 export 'src/middleware_response.dart';
+export 'src/watch_event.dart';
 
 // Built-in middlewares
+export 'src/middlewares/circuit_breaker_middleware.dart';
 export 'src/middlewares/dedup_middleware.dart';
+export 'src/middlewares/headers_middleware.dart';
+export 'src/middlewares/inline_middleware.dart';
 export 'src/middlewares/logging_middleware.dart';
+export 'src/middlewares/retry_middleware.dart';
 export 'src/middlewares/swr_middleware.dart';
+export 'src/middlewares/timeout_middleware.dart';

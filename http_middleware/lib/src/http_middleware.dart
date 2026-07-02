@@ -5,9 +5,8 @@ import 'middleware_response.dart';
 ///
 /// When called with a [MiddlewareContext], it invokes the next middleware
 /// in the chain (or the actual HTTP request if this is the last middleware).
-typedef MiddlewareNext = Future<MiddlewareResponse> Function(
-  MiddlewareContext context,
-);
+typedef MiddlewareNext =
+    Future<MiddlewareResponse> Function(MiddlewareContext context);
 
 /// Base class for HTTP middlewares.
 ///
@@ -76,7 +75,7 @@ typedef MiddlewareNext = Future<MiddlewareResponse> Function(
 ///       // Return cached immediately, revalidate in background
 ///       return MiddlewareResponse.withBackgroundContinuation(
 ///         response: cached.toStreamedResponse(),
-///         backgroundContext: context.copyWith()..markAsBackground(),
+///         backgroundContext: context.copyForBackground(),
 ///       );
 ///     }
 ///
@@ -136,14 +135,24 @@ abstract class HttpMiddleware {
   /// This is called for ALL middlewares in the chain when a background
   /// error occurs, not just the one that triggered the continuation.
   ///
+  /// [context] is the background context whose chain execution failed.
+  ///
   /// Example:
   /// ```dart
   /// @override
-  /// void onBackgroundError(Object error, StackTrace stackTrace) {
-  ///   logger.warning('Background revalidation failed: $error');
+  /// void onBackgroundError(
+  ///   Object error,
+  ///   StackTrace stackTrace,
+  ///   MiddlewareContext context,
+  /// ) {
+  ///   logger.warning('Revalidation of ${context.request.url} failed: $error');
   /// }
   /// ```
-  void onBackgroundError(Object error, StackTrace stackTrace) {
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
     // Silent by default - appropriate for background operations
   }
 }

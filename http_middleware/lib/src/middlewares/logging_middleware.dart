@@ -62,10 +62,8 @@ class LoggingMiddleware extends HttpMiddleware {
   ///
   /// [includeHeaders] controls whether request/response headers are logged.
   /// Defaults to false for privacy and brevity.
-  const LoggingMiddleware({
-    LogCallback? onLog,
-    this.includeHeaders = false,
-  }) : _onLog = onLog;
+  const LoggingMiddleware({LogCallback? onLog, this.includeHeaders = false})
+    : _onLog = onLog;
 
   final LogCallback? _onLog;
 
@@ -108,8 +106,10 @@ class LoggingMiddleware extends HttpMiddleware {
       final statusText = response.response.reasonPhrase ?? '';
 
       // Log response
-      _log('$prefix<-- ${response.response.statusCode} $statusText'
-          '$cacheInfo (${stopwatch.elapsedMilliseconds}ms)');
+      _log(
+        '$prefix<-- ${response.response.statusCode} $statusText'
+        '$cacheInfo (${stopwatch.elapsedMilliseconds}ms)',
+      );
 
       if (includeHeaders && response.response.headers.isNotEmpty) {
         for (final entry in response.response.headers.entries) {
@@ -126,7 +126,14 @@ class LoggingMiddleware extends HttpMiddleware {
   }
 
   @override
-  void onBackgroundError(Object error, StackTrace stackTrace) {
-    _log('[BG] Background request failed: $error');
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
+    _log(
+      '[BG] ${context.request.method} ${context.request.url} '
+      'failed: $error',
+    );
   }
 }

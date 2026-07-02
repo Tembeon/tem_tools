@@ -8,6 +8,7 @@ A flexible HTTP middleware system for Dart that enables powerful request/respons
 - **Pipe pattern** - Middlewares chain together naturally, wrapping each other
 - **Background continuation** - Return responses immediately while continuing requests in the background
 - **Stale-While-Revalidate (SWR)** - Built-in SWR middleware for instant cached responses with background revalidation
+- **Streamed SWR** - `watch()` emits the cached response first, then the fresh one (`Stream<Response>`)
 - **Context sharing** - Pass data between middlewares via `MiddlewareContext`
 - **Error handling hooks** - Handle background errors gracefully with `onBackgroundError`
 
@@ -26,22 +27,41 @@ dependencies:
 
 ## Quick Start
 
+The plug-and-play way - `MiddlewareClient.standard` wires the recommended
+chain (dedup, SWR cache, retries, circuit breaker, timeout) for you:
+
 ```dart
 import 'package:http_middleware/http_middleware.dart';
 
 void main() async {
-  final client = MiddlewareClient(
-    middlewares: [
-      LoggingMiddleware(),
-      SwrMiddleware(cache: InMemorySwrCache()),
-    ],
+  final client = MiddlewareClient.standard(
+    defaultHeaders: {'User-Agent': 'my-app/1.0'},
+    onLog: print, // omit to disable logging
   );
 
   final response = await client.get(Uri.parse('https://api.example.com/data'));
   print(response.body);
 
+  client.watchGet(Uri.parse('https://api.example.com/data')).listen(
+    (event) => print('${event.source}: ${event.response.body}'),
+  );
+
   client.close();
 }
+```
+
+`standard()` is deliberately opinionated with few knobs (`cache`,
+`defaultHeaders`, `onLog`, `maxRetries`, `timeout`, `extra` for custom
+middlewares). Need retry predicates, breaker thresholds or custom dedup
+keys? Compose the chain yourself - that's the intended escape hatch:
+
+```dart
+final client = MiddlewareClient(
+  middlewares: [
+    LoggingMiddleware(),
+    SwrMiddleware(cache: InMemorySwrCache()),
+  ],
+);
 ```
 
 ## Creating Custom Middlewares
@@ -66,6 +86,28 @@ class AuthMiddleware extends HttpMiddleware {
     return next(context);
   }
 }
+```
+
+For one-off logic, `InlineMiddleware` avoids the class boilerplate:
+
+```dart
+MiddlewareClient(
+  middlewares: [
+    // Mutate the request
+    InlineMiddleware.onRequest((request) {
+      request.headers['X-Request-Id'] = generateId();
+    }),
+    // Observe the response (must not consume its stream)
+    InlineMiddleware.onResponse((response, context) {
+      if (response.statusCode == 401) authState.markExpired();
+    }),
+    // Full control
+    InlineMiddleware((context, next) async {
+      context.metadata['trace:id'] = generateTraceId();
+      return next(context);
+    }),
+  ],
+)
 ```
 
 ## Middleware Execution Order
@@ -111,6 +153,55 @@ final response1 = await client.get(uri);  // ~200ms
 // Background request refreshes cache
 final response2 = await client.get(uri);  // ~1ms
 ```
+
+### Streamed SWR: watch()
+
+`send()` can only return one response, so with SWR the fresh data lands
+in the cache silently. `watch()` exposes both: it emits the cached
+response immediately, then the fresh one when revalidation completes.
+
+Each event is a `WatchEvent` whose `source` tells you where the data
+came from:
+
+- `WatchSource.network` - fresh data, final event
+- `WatchSource.cacheRevalidating` - stale cache data, fresh event follows
+- `WatchSource.cacheOnly` - stale cache data, nothing else on this stream
+  (e.g. another request is already revalidating this key)
+
+```dart
+// Cache hit: 2 events (stale from cache, then fresh from network)
+// Cache miss or no cache middleware: 1 event (network)
+client.watchGet(Uri.parse('https://api.example.com/profile')).listen(
+  (event) {
+    render(event.response.body);
+    // Or the isFromCache / isRevalidating shorthands
+    showUpdatingBadge(visible: event.source == WatchSource.cacheRevalidating);
+  },
+);
+```
+
+Map to a typed stream with regular stream operators:
+
+```dart
+final Stream<Profile> profile = client
+    .watchGet(profileUri)
+    .map((event) => Profile.fromJson(jsonDecode(event.response.body)));
+```
+
+In Flutter this plugs straight into a `StreamBuilder`: the UI shows
+cached data instantly and rebuilds once when fresh data arrives.
+
+Behavior details:
+
+- `skipUnchanged: true` suppresses the second event when the fresh
+  response is byte-identical to the cached one - no needless rebuild.
+- If revalidation fails, the cached event is delivered first and the
+  error follows as a stream error. Add `.handleError((_) {})` for
+  stale-on-error behavior.
+- Cancelling the subscription after the first event does not cancel the
+  revalidation - the cache is still refreshed, like with `send()`.
+- `watch(request)` accepts any clonable `BaseRequest`; `watchGet(url)`
+  is the shorthand for the common case.
 
 ### Custom Cache Backend
 
@@ -204,9 +295,13 @@ class MyMiddleware extends HttpMiddleware {
   }
 
   @override
-  void onBackgroundError(Object error, StackTrace stackTrace) {
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
     // Log the error, update metrics, etc.
-    logger.warning('Background revalidation failed: $error');
+    logger.warning('Revalidation of ${context.request.url} failed: $error');
   }
 }
 ```
@@ -281,6 +376,109 @@ Background and cached responses are marked:
 
 Stale-While-Revalidate caching (see above for details).
 
+### DedupMiddleware
+
+Deduplicates concurrent identical requests - only one network call is made
+and all callers share the response:
+
+```dart
+DedupMiddleware(
+  // Defaults: GET and HEAD, key is METHOD:URL
+  keyGenerator: (request) => '${request.method}:${request.url}',
+)
+```
+
+### RetryMiddleware
+
+Retries failed requests with exponential backoff. Each retry sends a fresh
+clone of the original request:
+
+```dart
+RetryMiddleware(
+  maxRetries: 3,
+  // Defaults: idempotent methods only; 408/429/5xx and network errors
+  shouldRetryResponse: (response) => response.statusCode >= 500,
+  delay: (attempt) => Duration(milliseconds: 200 * attempt),
+)
+```
+
+Place it after caching middlewares (closer to the network) so retries don't
+re-enter the cache layer.
+
+### CircuitBreakerMiddleware
+
+Stops hammering a failing backend: after `failureThreshold` consecutive
+failures the circuit opens and requests fail fast with `CircuitOpenException`
+(no network call). After `openDuration` a probe request is let through -
+success closes the circuit, failure reopens it.
+
+```dart
+CircuitBreakerMiddleware(
+  failureThreshold: 5,
+  openDuration: const Duration(seconds: 30),
+  halfOpenProbes: 1,
+  // Circuits are per scheme://host:port by default
+  keyGenerator: (request) => request.url.host,
+  // 5xx by default; errors: ClientException and TimeoutException
+  isFailureResponse: (response) => response.statusCode >= 500,
+  // Exempt endpoints, e.g. health checks
+  shouldBreak: (request) => !request.url.path.startsWith('/health'),
+  onStateChange: (key, from, to) => log.warning('$key: $from -> $to'),
+)
+```
+
+With `SwrMiddleware` above the breaker an outage degrades gracefully:
+cache hits are still served instantly, only cache misses fail fast.
+`CircuitOpenException` is not retried by `RetryMiddleware` defaults, so
+retries stop as soon as the circuit opens.
+
+### TimeoutMiddleware
+
+Bounds how long a request may take, with an optional relaxed limit for
+background revalidations:
+
+```dart
+TimeoutMiddleware(
+  const Duration(seconds: 5),
+  backgroundTimeout: const Duration(seconds: 30),
+)
+```
+
+### HeadersMiddleware
+
+Applies default headers to every request. Request-level headers win unless
+`overrideExisting` is set:
+
+```dart
+// Static headers
+HeadersMiddleware({'User-Agent': 'my-app/1.2.0'})
+
+// Dynamic headers, e.g. tokens from secure storage
+HeadersMiddleware.builder((request) async {
+  final token = await tokenStorage.read();
+  return {'Authorization': 'Bearer $token'};
+})
+```
+
+Background revalidations re-run the whole chain, so they pick up fresh
+header values (e.g. a refreshed token) automatically.
+
+## Recommended Order
+
+```dart
+MiddlewareClient(
+  middlewares: [
+    LoggingMiddleware(),          // outermost: sees everything, incl. cache hits
+    HeadersMiddleware(...),       // headers apply to foreground and background
+    DedupMiddleware(),            // collapse concurrent identical calls
+    SwrMiddleware(...),           // serve from cache, revalidate in background
+    RetryMiddleware(),            // retries hit the network, not the cache
+    CircuitBreakerMiddleware(),   // every retry attempt is checked and recorded
+    TimeoutMiddleware(...),       // innermost: timeouts count as breaker failures
+  ],
+)
+```
+
 ## API Reference
 
 ### Core Classes
@@ -289,13 +487,26 @@ Stale-While-Revalidate caching (see above for details).
 |-------|-------------|
 | `MiddlewareClient` | HTTP client that processes requests through middleware chain |
 | `HttpMiddleware` | Base class for creating middlewares |
+| `InlineMiddleware` | Middleware from a closure, no subclass needed |
 | `MiddlewareContext` | Carries request and metadata through the chain |
 | `MiddlewareResponse` | Response wrapper supporting background continuation |
 | `CachedResponse` | Serializable response for caching |
+
+### Built-in Middlewares
+
+| Class | Description |
+|-------|-------------|
+| `LoggingMiddleware` | Logs requests, responses and timing |
+| `SwrMiddleware` | Stale-While-Revalidate caching |
+| `DedupMiddleware` | Collapses concurrent identical requests |
+| `RetryMiddleware` | Retries failures with exponential backoff |
+| `CircuitBreakerMiddleware` | Fails fast when a backend keeps failing |
+| `TimeoutMiddleware` | Bounds request duration |
+| `HeadersMiddleware` | Applies default/dynamic headers |
 
 ### SWR Components
 
 | Class/Interface | Description |
 |-----------------|-------------|
 | `SwrCache` | Interface for cache backends |
-| `InMemorySwrCache` | Simple in-memory cache implementation |
+| `InMemorySwrCache` | In-memory cache with optional LRU limits (`maxSizeBytes`, `maxEntries`) |

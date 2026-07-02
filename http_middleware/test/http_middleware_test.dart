@@ -97,8 +97,9 @@ void main() {
         contentLength: body.length,
       );
 
-      final cached =
-          await CachedResponse.fromStreamedResponse(streamedResponse);
+      final cached = await CachedResponse.fromStreamedResponse(
+        streamedResponse,
+      );
 
       expect(cached.statusCode, equals(200));
       expect(cached.body, equals(body));
@@ -138,6 +139,55 @@ void main() {
       expect(cached.bodyString, equals('Hello, World!'));
     });
 
+    test('bodyString decodes multi-byte UTF-8', () {
+      final cached = CachedResponse(
+        statusCode: 200,
+        body: Uint8List.fromList(utf8.encode('Привет, мир!')),
+        headers: {},
+      );
+
+      expect(cached.bodyString, equals('Привет, мир!'));
+    });
+
+    test('fromStreamedResponse sets cachedAt', () async {
+      final streamedResponse = http.StreamedResponse(
+        Stream.value(utf8.encode('test')),
+        200,
+      );
+
+      final cached = await CachedResponse.fromStreamedResponse(
+        streamedResponse,
+      );
+
+      expect(cached.cachedAt, isNotNull);
+    });
+
+    test('toStreamedResponse reports buffered body length', () async {
+      final body = Uint8List.fromList(utf8.encode('decoded body'));
+      final cached = CachedResponse(
+        statusCode: 200,
+        body: body,
+        headers: {},
+        // Stale value, e.g. length of the compressed body
+        contentLength: 5,
+      );
+
+      expect(cached.toStreamedResponse().contentLength, equals(body.length));
+    });
+
+    test('toStreamedResponse attaches request', () {
+      final request = http.Request('GET', Uri.parse('https://example.com'));
+      final cached = CachedResponse(
+        statusCode: 200,
+        body: Uint8List(0),
+        headers: {},
+      );
+
+      final response = cached.toStreamedResponse(request: request);
+
+      expect(response.request, same(request));
+    });
+
     test('sizeInBytes returns body length', () {
       final cached = CachedResponse(
         statusCode: 200,
@@ -155,10 +205,7 @@ void main() {
         return http.Response('{"success": true}', 200);
       });
 
-      final client = MiddlewareClient(
-        inner: mockClient,
-        middlewares: [],
-      );
+      final client = MiddlewareClient(inner: mockClient, middlewares: []);
 
       final response = await client.get(Uri.parse('https://example.com/api'));
 
@@ -301,10 +348,7 @@ void main() {
 
       final client = MiddlewareClient(
         inner: mockClient,
-        middlewares: [
-          errorHandler,
-          _BackgroundTriggerMiddleware(),
-        ],
+        middlewares: [errorHandler, _BackgroundTriggerMiddleware()],
       );
 
       // Should not throw
@@ -497,6 +541,66 @@ void main() {
       client.close();
     });
 
+    test(
+      'background revalidation context is not marked as from cache',
+      () async {
+        final cache = InMemorySwrCache();
+        final backgroundContexts = <MiddlewareContext>[];
+
+        final mockClient = MockClient((request) async {
+          return http.Response('ok', 200);
+        });
+
+        final client = MiddlewareClient(
+          inner: mockClient,
+          middlewares: [
+            _ContextCaptureMiddleware(backgroundContexts, onlyBackground: true),
+            SwrMiddleware(cache: cache),
+          ],
+        );
+
+        final uri = Uri.parse('https://example.com');
+        await client.get(uri);
+        // Cache hit triggers a background revalidation
+        await client.get(uri);
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        expect(backgroundContexts, hasLength(1));
+        expect(backgroundContexts.single.isFromCache, isFalse);
+
+        client.close();
+      },
+    );
+
+    test('concurrent cache hits trigger a single revalidation', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final mockClient = MockClient((request) async {
+        networkCalls++;
+        await Future.delayed(const Duration(milliseconds: 50));
+        return http.Response('ok', 200);
+      });
+
+      final client = MiddlewareClient(
+        inner: mockClient,
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com');
+      await client.get(uri);
+      expect(networkCalls, equals(1));
+
+      // Concurrent cache hits: each would previously spawn a revalidation
+      await Future.wait([client.get(uri), client.get(uri), client.get(uri)]);
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Only one background revalidation should have happened
+      expect(networkCalls, equals(2));
+
+      client.close();
+    });
+
     test('respects shouldCacheResponse', () async {
       final cache = InMemorySwrCache();
 
@@ -548,12 +652,14 @@ void main() {
       expect(networkCalls, equals(1));
 
       // Complete the request
-      completer.complete(MiddlewareResponse.immediate(
-        http.StreamedResponse(
-          Stream.value(utf8.encode('shared response')),
-          200,
+      completer.complete(
+        MiddlewareResponse.immediate(
+          http.StreamedResponse(
+            Stream.value(utf8.encode('shared response')),
+            200,
+          ),
         ),
-      ));
+      );
 
       // All futures should resolve
       final responses = await Future.wait([future1, future2, future3]);
@@ -618,9 +724,11 @@ void main() {
 
       expect(networkCalls, equals(1));
 
-      completer.complete(MiddlewareResponse.immediate(
-        http.StreamedResponse(Stream.value([]), 200),
-      ));
+      completer.complete(
+        MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value([]), 200),
+        ),
+      );
 
       await Future.wait([future1, future2]);
 
@@ -643,12 +751,14 @@ void main() {
 
       final future1 = dedup.process(
         MiddlewareContext(
-            request: http.Request('GET', Uri.parse('https://example.com/a'))),
+          request: http.Request('GET', Uri.parse('https://example.com/a')),
+        ),
         next,
       );
       final future2 = dedup.process(
         MiddlewareContext(
-            request: http.Request('GET', Uri.parse('https://example.com/b'))),
+          request: http.Request('GET', Uri.parse('https://example.com/b')),
+        ),
         next,
       );
 
@@ -743,22 +853,30 @@ void main() {
       // Different query params but same path - should be deduplicated
       final future1 = dedup.process(
         MiddlewareContext(
-            request:
-                http.Request('GET', Uri.parse('https://example.com/data?v=1'))),
+          request: http.Request(
+            'GET',
+            Uri.parse('https://example.com/data?v=1'),
+          ),
+        ),
         next,
       );
       final future2 = dedup.process(
         MiddlewareContext(
-            request:
-                http.Request('GET', Uri.parse('https://example.com/data?v=2'))),
+          request: http.Request(
+            'GET',
+            Uri.parse('https://example.com/data?v=2'),
+          ),
+        ),
         next,
       );
 
       expect(networkCalls, equals(1));
 
-      completer.complete(MiddlewareResponse.immediate(
-        http.StreamedResponse(Stream.value(utf8.encode('shared')), 200),
-      ));
+      completer.complete(
+        MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('shared')), 200),
+        ),
+      );
 
       final responses = await Future.wait([future1, future2]);
 
@@ -827,26 +945,22 @@ void main() {
 
       // First request - goes to network
       final context1 = MiddlewareContext(request: http.Request('GET', uri));
-      final future1 = dedup.process(
-        context1,
-        (ctx) {
-          firstContext = ctx;
-          return completer.future;
-        },
-      );
+      final future1 = dedup.process(context1, (ctx) {
+        firstContext = ctx;
+        return completer.future;
+      });
 
       // Second request - should be deduplicated (won't call next)
       final context2 = MiddlewareContext(request: http.Request('GET', uri));
-      final future2 = dedup.process(
-        context2,
-        (ctx) async {
-          fail('Second request should not reach next()');
-        },
-      );
+      final future2 = dedup.process(context2, (ctx) async {
+        fail('Second request should not reach next()');
+      });
 
-      completer.complete(MiddlewareResponse.immediate(
-        http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
-      ));
+      completer.complete(
+        MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+        ),
+      );
 
       await Future.wait([future1, future2]);
 
@@ -910,42 +1024,1084 @@ void main() {
       context.markAsBackground();
 
       // Process as background request
-      await dedup.process(
-        context,
-        (ctx) async {
-          nextCalls++;
-          return MiddlewareResponse.immediate(
-            http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
-          );
-        },
-      );
+      await dedup.process(context, (ctx) async {
+        nextCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
+        );
+      });
 
       // Background requests should not be tracked (they pass through)
       expect(dedup.inFlightCount, equals(0));
       expect(nextCalls, equals(1));
     });
 
-    test('preserves background continuation from downstream middleware',
-        () async {
-      final dedup = DedupMiddleware();
-      final uri = Uri.parse('https://example.com/data');
+    test(
+      'returns response unbuffered when no concurrent request joined',
+      () async {
+        final dedup = DedupMiddleware();
+        final original = http.StreamedResponse(
+          Stream.value(utf8.encode('ok')),
+          200,
+        );
 
-      // Simulate a downstream middleware that returns a background continuation
-      final response = await dedup.process(
-        MiddlewareContext(request: http.Request('GET', uri)),
-        (ctx) async {
-          final bgContext = ctx.copyForBackground();
-          return MiddlewareResponse.withBackgroundContinuation(
-            response:
-                http.StreamedResponse(Stream.value(utf8.encode('ok')), 200),
-            backgroundContext: bgContext,
-          );
-        },
+        final result = await dedup.process(
+          MiddlewareContext(
+            request: http.Request('GET', Uri.parse('https://example.com')),
+          ),
+          (ctx) async => MiddlewareResponse.immediate(original),
+        );
+
+        // The exact same response object passes through - no buffering
+        expect(result.response, same(original));
+      },
+    );
+
+    test(
+      'preserves background continuation from downstream middleware',
+      () async {
+        final dedup = DedupMiddleware();
+        final uri = Uri.parse('https://example.com/data');
+
+        // Simulate a downstream middleware that returns a background continuation
+        final response = await dedup.process(
+          MiddlewareContext(request: http.Request('GET', uri)),
+          (ctx) async {
+            final bgContext = ctx.copyForBackground();
+            return MiddlewareResponse.withBackgroundContinuation(
+              response: http.StreamedResponse(
+                Stream.value(utf8.encode('ok')),
+                200,
+              ),
+              backgroundContext: bgContext,
+            );
+          },
+        );
+
+        // The background continuation should be preserved
+        expect(response.hasBackgroundContinuation, isTrue);
+        expect(response.backgroundContext, isNotNull);
+      },
+    );
+  });
+
+  group('InlineMiddleware', () {
+    test('onRequest mutates the request', () async {
+      String? capturedHeader;
+
+      final mockClient = MockClient((request) async {
+        capturedHeader = request.headers['x-custom'];
+        return http.Response('ok', 200);
+      });
+
+      final client = MiddlewareClient(
+        inner: mockClient,
+        middlewares: [
+          InlineMiddleware.onRequest((request) {
+            request.headers['x-custom'] = 'value';
+          }),
+        ],
       );
 
-      // The background continuation should be preserved
-      expect(response.hasBackgroundContinuation, isTrue);
-      expect(response.backgroundContext, isNotNull);
+      await client.get(Uri.parse('https://example.com'));
+
+      expect(capturedHeader, equals('value'));
+
+      client.close();
+    });
+
+    test('onResponse observes the response without consuming it', () async {
+      int? observedStatus;
+
+      final mockClient = MockClient((request) async {
+        return http.Response('body', 201);
+      });
+
+      final client = MiddlewareClient(
+        inner: mockClient,
+        middlewares: [
+          InlineMiddleware.onResponse((response, context) {
+            observedStatus = response.statusCode;
+          }),
+        ],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(observedStatus, equals(201));
+      expect(response.body, equals('body'));
+
+      client.close();
+    });
+
+    test('full handler can short-circuit', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          fail('Network should not be reached');
+        }),
+        middlewares: [
+          InlineMiddleware((context, next) async {
+            return MiddlewareResponse.immediate(
+              http.StreamedResponse(Stream.value(utf8.encode('stub')), 200),
+            );
+          }),
+        ],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.body, equals('stub'));
+
+      client.close();
+    });
+  });
+
+  group('HeadersMiddleware', () {
+    test('adds missing headers', () async {
+      Map<String, String>? captured;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          captured = request.headers;
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          HeadersMiddleware({'x-app': 'test', 'accept': 'application/json'}),
+        ],
+      );
+
+      await client.get(Uri.parse('https://example.com'));
+
+      expect(captured!['x-app'], equals('test'));
+      expect(captured!['accept'], equals('application/json'));
+
+      client.close();
+    });
+
+    test('does not override request headers by default', () async {
+      Map<String, String>? captured;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          captured = request.headers;
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          HeadersMiddleware({'x-app': 'default'}),
+        ],
+      );
+
+      await client.get(
+        Uri.parse('https://example.com'),
+        headers: {'x-app': 'explicit'},
+      );
+
+      expect(captured!['x-app'], equals('explicit'));
+
+      client.close();
+    });
+
+    test('overrides request headers when overrideExisting is true', () async {
+      Map<String, String>? captured;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          captured = request.headers;
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          HeadersMiddleware({'x-app': 'forced'}, overrideExisting: true),
+        ],
+      );
+
+      await client.get(
+        Uri.parse('https://example.com'),
+        headers: {'x-app': 'explicit'},
+      );
+
+      expect(captured!['x-app'], equals('forced'));
+
+      client.close();
+    });
+
+    test('builder supplies headers asynchronously', () async {
+      Map<String, String>? captured;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          captured = request.headers;
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          HeadersMiddleware.builder((request) async {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+            return {'authorization': 'Bearer fresh-token'};
+          }),
+        ],
+      );
+
+      await client.get(Uri.parse('https://example.com'));
+
+      expect(captured!['authorization'], equals('Bearer fresh-token'));
+
+      client.close();
+    });
+  });
+
+  group('RetryMiddleware', () {
+    test('retries retriable responses until success', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          if (calls < 3) {
+            return http.Response('unavailable', 503);
+          }
+          return http.Response('ok', 200);
+        }),
+        middlewares: [RetryMiddleware(delay: (_) => Duration.zero)],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(200));
+      expect(calls, equals(3));
+
+      client.close();
+    });
+
+    test('returns last response after maxRetries', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          return http.Response('unavailable', 503);
+        }),
+        middlewares: [
+          RetryMiddleware(maxRetries: 2, delay: (_) => Duration.zero),
+        ],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(503));
+      expect(calls, equals(3));
+
+      client.close();
+    });
+
+    test('retries thrown ClientException', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          if (calls == 1) {
+            throw http.ClientException('connection reset');
+          }
+          return http.Response('ok', 200);
+        }),
+        middlewares: [RetryMiddleware(delay: (_) => Duration.zero)],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(200));
+      expect(calls, equals(2));
+
+      client.close();
+    });
+
+    test('rethrows after maxRetries', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          throw http.ClientException('connection reset');
+        }),
+        middlewares: [
+          RetryMiddleware(maxRetries: 1, delay: (_) => Duration.zero),
+        ],
+      );
+
+      await expectLater(
+        client.get(Uri.parse('https://example.com')),
+        throwsA(isA<http.ClientException>()),
+      );
+      expect(calls, equals(2));
+
+      client.close();
+    });
+
+    test('does not retry POST by default', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          return http.Response('unavailable', 503);
+        }),
+        middlewares: [RetryMiddleware(delay: (_) => Duration.zero)],
+      );
+
+      final response = await client.post(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(503));
+      expect(calls, equals(1));
+
+      client.close();
+    });
+
+    test('does not retry responses with background continuation', () async {
+      var nextCalls = 0;
+      final retry = RetryMiddleware(delay: (_) => Duration.zero);
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+
+      final result = await retry.process(context, (ctx) async {
+        nextCalls++;
+        return MiddlewareResponse.withBackgroundContinuation(
+          response: http.StreamedResponse(Stream.value([]), 503),
+          backgroundContext: ctx.copyForBackground(),
+        );
+      });
+
+      expect(nextCalls, equals(1));
+      expect(result.hasBackgroundContinuation, isTrue);
+    });
+  });
+
+  group('TimeoutMiddleware', () {
+    test('throws TimeoutException when the request is too slow', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          return http.Response('ok', 200);
+        }),
+        middlewares: [const TimeoutMiddleware(Duration(milliseconds: 20))],
+      );
+
+      await expectLater(
+        client.get(Uri.parse('https://example.com')),
+        throwsA(isA<TimeoutException>()),
+      );
+
+      client.close();
+    });
+
+    test('passes fast requests through', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('ok', 200)),
+        middlewares: [const TimeoutMiddleware(Duration(seconds: 5))],
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(200));
+
+      client.close();
+    });
+
+    test('uses backgroundTimeout for background requests', () async {
+      const middleware = TimeoutMiddleware(
+        Duration(milliseconds: 10),
+        backgroundTimeout: Duration(seconds: 5),
+      );
+
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+      context.markAsBackground();
+
+      final result = await middleware.process(context, (ctx) async {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value([]), 200),
+        );
+      });
+
+      expect(result.response.statusCode, equals(200));
+    });
+  });
+
+  group('MiddlewareClient.watch', () {
+    test('emits one event on cache miss', () async {
+      final cache = InMemorySwrCache();
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('fresh', 200)),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final events = await client
+          .watchGet(Uri.parse('https://example.com/data'))
+          .toList();
+
+      expect(events, hasLength(1));
+      expect(events.single.response.body, equals('fresh'));
+      expect(events.single.source, equals(WatchSource.network));
+      expect(events.single.isFromCache, isFalse);
+      expect(events.single.isRevalidating, isFalse);
+      expect(cache.length, equals(1));
+
+      client.close();
+    });
+
+    test('emits cached then fresh on cache hit', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('response $networkCalls', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+
+      // Populate the cache
+      await client.get(uri);
+
+      final events = await client.watchGet(uri).toList();
+
+      expect(events, hasLength(2));
+      expect(events[0].response.body, equals('response 1'));
+      expect(events[0].source, equals(WatchSource.cacheRevalidating));
+      expect(events[0].isFromCache, isTrue);
+      expect(events[0].isRevalidating, isTrue);
+      expect(events[1].response.body, equals('response 2'));
+      expect(events[1].source, equals(WatchSource.network));
+      expect(events[1].isFromCache, isFalse);
+      expect(events[1].isRevalidating, isFalse);
+
+      // The fresh response also updated the cache
+      final cached = await cache.get('GET:$uri');
+      expect(cached!.bodyString, equals('response 2'));
+
+      client.close();
+    });
+
+    test('emits one event without cache middleware', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('plain', 200)),
+        middlewares: [],
+      );
+
+      final events = await client
+          .watchGet(Uri.parse('https://example.com'))
+          .toList();
+
+      expect(events, hasLength(1));
+      expect(events.single.response.body, equals('plain'));
+      expect(events.single.isFromCache, isFalse);
+      expect(events.single.isRevalidating, isFalse);
+
+      client.close();
+    });
+
+    test('emits cached event then error when revalidation fails', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+      MiddlewareContext? errorContext;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          if (networkCalls > 1) {
+            throw http.ClientException('server down');
+          }
+          return http.Response('stale', 200);
+        }),
+        middlewares: [
+          _BackgroundErrorCaptureMiddleware((ctx) => errorContext = ctx),
+          SwrMiddleware(cache: cache),
+        ],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      final events = <WatchEvent>[];
+      Object? streamError;
+      await client
+          .watchGet(uri)
+          .handleError((Object e) => streamError = e)
+          .forEach(events.add);
+
+      expect(events, hasLength(1));
+      expect(events.single.response.body, equals('stale'));
+      expect(events.single.isFromCache, isTrue);
+      expect(events.single.isRevalidating, isTrue);
+      expect(streamError, isA<http.ClientException>());
+      // Middlewares were notified so cache state was cleaned up
+      expect(errorContext, isNotNull);
+      expect(errorContext!.isBackground, isTrue);
+
+      client.close();
+    });
+
+    test('skipUnchanged suppresses identical fresh response', () async {
+      final cache = InMemorySwrCache();
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('same', 200)),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      final events = await client.watchGet(uri, skipUnchanged: true).toList();
+
+      expect(events, hasLength(1));
+      expect(events.single.response.body, equals('same'));
+      expect(events.single.isFromCache, isTrue);
+      expect(events.single.isRevalidating, isTrue);
+
+      client.close();
+    });
+
+    test('skipUnchanged still emits a changed fresh response', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('response $networkCalls', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      final events = await client.watchGet(uri, skipUnchanged: true).toList();
+
+      expect(events, hasLength(2));
+
+      client.close();
+    });
+
+    test(
+      'cache hit during another revalidation is not marked revalidating',
+      () async {
+        final cache = InMemorySwrCache();
+        var networkCalls = 0;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            networkCalls++;
+            if (networkCalls > 1) {
+              // Slow revalidation holds the SWR lock
+              await Future.delayed(const Duration(milliseconds: 100));
+            }
+            return http.Response('response $networkCalls', 200);
+          }),
+          middlewares: [SwrMiddleware(cache: cache)],
+        );
+
+        final uri = Uri.parse('https://example.com/data');
+        await client.get(uri);
+
+        // Starts a slow revalidation
+        final firstWatch = client.watchGet(uri).toList();
+
+        // While it's in flight, another watch hits the cache: it must not
+        // claim to be revalidating - no second event will follow
+        final second = await client.watchGet(uri).toList();
+        expect(second, hasLength(1));
+        expect(second.single.source, equals(WatchSource.cacheOnly));
+        expect(second.single.isFromCache, isTrue);
+        expect(second.single.isRevalidating, isFalse);
+
+        final first = await firstWatch;
+        expect(first, hasLength(2));
+        expect(first[0].isRevalidating, isTrue);
+
+        client.close();
+      },
+    );
+
+    test('early cancellation still refreshes the cache', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('response $networkCalls', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      // Take only the first (cached) event and cancel
+      final first = await client.watchGet(uri).first;
+      expect(first.response.body, equals('response 1'));
+      expect(first.isFromCache, isTrue);
+
+      // The revalidation still runs to completion
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(networkCalls, equals(2));
+
+      final cached = await cache.get('GET:$uri');
+      expect(cached!.bodyString, equals('response 2'));
+
+      // And the revalidation lock was released: a new watch revalidates
+      final events = await client.watchGet(uri).toList();
+      expect(events, hasLength(2));
+      expect(networkCalls, equals(3));
+
+      client.close();
+    });
+
+    test('early cancellation with failing revalidation stays silent', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          if (networkCalls > 1) {
+            throw http.ClientException('server down');
+          }
+          return http.Response('stale', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      // Cancel after the first event; the failing revalidation must not
+      // produce an unhandled async error
+      final first = await client.watchGet(uri).first;
+      expect(first.response.body, equals('stale'));
+
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(networkCalls, equals(2));
+
+      client.close();
+    });
+  });
+
+  group('MiddlewareClient.standard', () {
+    test('provides SWR caching out of the box', () async {
+      var networkCalls = 0;
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('response $networkCalls', 200);
+        }),
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+
+      final response1 = await client.get(uri);
+      expect(response1.body, equals('response 1'));
+
+      // Cache hit: served from cache, background revalidation follows
+      final response2 = await client.get(uri);
+      expect(response2.body, equals('response 1'));
+
+      client.close();
+    });
+
+    test('applies default headers and logging when provided', () async {
+      final logs = <String>[];
+      Map<String, String>? captured;
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async {
+          captured = request.headers;
+          return http.Response('ok', 200);
+        }),
+        defaultHeaders: {'x-app': 'test'},
+        onLog: logs.add,
+      );
+
+      await client.get(Uri.parse('https://example.com'));
+
+      expect(captured!['x-app'], equals('test'));
+      expect(logs, isNotEmpty);
+
+      client.close();
+    });
+
+    test('retries transient failures by default', () async {
+      var networkCalls = 0;
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async {
+          networkCalls++;
+          if (networkCalls < 2) {
+            return http.Response('unavailable', 503);
+          }
+          return http.Response('ok', 200);
+        }),
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(200));
+      expect(networkCalls, equals(2));
+
+      client.close();
+    });
+
+    test('includes custom extra middlewares', () async {
+      final seen = <String>[];
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async => http.Response('ok', 200)),
+        extra: [
+          InlineMiddleware.onRequest((request) {
+            seen.add(request.url.path);
+          }),
+        ],
+      );
+
+      await client.get(Uri.parse('https://example.com/hello'));
+
+      expect(seen, equals(['/hello']));
+
+      client.close();
+    });
+  });
+
+  group('CircuitBreakerMiddleware', () {
+    MiddlewareContext contextFor(String url) {
+      return MiddlewareContext(request: http.Request('GET', Uri.parse(url)));
+    }
+
+    Future<MiddlewareResponse> respond(int status) async {
+      return MiddlewareResponse.immediate(
+        http.StreamedResponse(Stream.value(<int>[]), status),
+      );
+    }
+
+    test('opens after failureThreshold consecutive failures', () async {
+      var networkCalls = 0;
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 2);
+
+      Future<MiddlewareResponse> next(MiddlewareContext ctx) {
+        networkCalls++;
+        return respond(500);
+      }
+
+      await breaker.process(contextFor('https://example.com/a'), next);
+      await breaker.process(contextFor('https://example.com/b'), next);
+
+      expect(
+        breaker.stateFor(http.Request('GET', Uri.parse('https://example.com'))),
+        equals(CircuitState.open),
+      );
+
+      await expectLater(
+        breaker.process(contextFor('https://example.com/c'), next),
+        throwsA(isA<CircuitOpenException>()),
+      );
+      expect(networkCalls, equals(2));
+    });
+
+    test('thrown ClientException counts as failure', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => throw http.ClientException('connection refused'),
+        ),
+        throwsA(isA<http.ClientException>()),
+      );
+
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(200),
+        ),
+        throwsA(isA<CircuitOpenException>()),
+      );
+    });
+
+    test('success resets the consecutive failure counter', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 2);
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(200),
+      );
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+
+    test(
+      'transitions to halfOpen after openDuration and closes on success',
+      () async {
+        var current = DateTime(2026, 1, 1);
+        final transitions = <String>[];
+
+        final breaker = CircuitBreakerMiddleware(
+          failureThreshold: 1,
+          openDuration: const Duration(seconds: 30),
+          now: () => current,
+          onStateChange: (key, from, to) => transitions.add('$from->$to'),
+        );
+
+        await breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(500),
+        );
+
+        // Still open: cooldown not elapsed
+        await expectLater(
+          breaker.process(
+            contextFor('https://example.com'),
+            (ctx) => respond(200),
+          ),
+          throwsA(isA<CircuitOpenException>()),
+        );
+
+        // Cooldown elapsed: probe goes through and closes the circuit
+        current = current.add(const Duration(seconds: 31));
+        final result = await breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(200),
+        );
+
+        expect(result.response.statusCode, equals(200));
+        expect(
+          breaker.stateForKey('https://example.com:443'),
+          equals(CircuitState.closed),
+        );
+        expect(
+          transitions,
+          equals([
+            'CircuitState.closed->CircuitState.open',
+            'CircuitState.open->CircuitState.halfOpen',
+            'CircuitState.halfOpen->CircuitState.closed',
+          ]),
+        );
+      },
+    );
+
+    test('failed probe reopens the circuit', () async {
+      var current = DateTime(2026, 1, 1);
+
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        openDuration: const Duration(seconds: 30),
+        now: () => current,
+      );
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+
+      current = current.add(const Duration(seconds: 31));
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(503),
+      );
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+
+      // And the cooldown restarted
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(200),
+        ),
+        throwsA(isA<CircuitOpenException>()),
+      );
+    });
+
+    test('halfOpen limits concurrent probes', () async {
+      var current = DateTime(2026, 1, 1);
+
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        openDuration: const Duration(seconds: 30),
+        now: () => current,
+      );
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+      current = current.add(const Duration(seconds: 31));
+
+      final probeGate = Completer<MiddlewareResponse>();
+      final probe = breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => probeGate.future,
+      );
+
+      // Second request while the probe is in flight is rejected
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(200),
+        ),
+        throwsA(isA<CircuitOpenException>()),
+      );
+
+      probeGate.complete(await respond(200));
+      await probe;
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+
+    test('circuits are isolated per host by default', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await breaker.process(
+        contextFor('https://down.example.com'),
+        (ctx) => respond(500),
+      );
+
+      // Other host is unaffected
+      final result = await breaker.process(
+        contextFor('https://up.example.com'),
+        (ctx) => respond(200),
+      );
+
+      expect(result.response.statusCode, equals(200));
+      expect(
+        breaker.stateForKey('https://down.example.com:443'),
+        equals(CircuitState.open),
+      );
+      expect(
+        breaker.stateForKey('https://up.example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+
+    test('shouldBreak exempts requests from circuit breaking', () async {
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        shouldBreak: (request) => !request.url.path.startsWith('/health'),
+      );
+
+      await breaker.process(
+        contextFor('https://example.com/api'),
+        (ctx) => respond(500),
+      );
+
+      // Circuit is open, but health checks bypass it
+      final result = await breaker.process(
+        contextFor('https://example.com/health'),
+        (ctx) => respond(200),
+      );
+
+      expect(result.response.statusCode, equals(200));
+    });
+
+    test('cached responses do not affect the circuit', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await breaker.process(contextFor('https://example.com'), (ctx) async {
+        ctx.markAsFromCache();
+        return respond(500);
+      });
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+
+    test('custom isFailureResponse treats 429 as failure', () async {
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        isFailureResponse: (response) =>
+            response.statusCode >= 500 || response.statusCode == 429,
+      );
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(429),
+      );
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+    });
+
+    test('reset manually closes circuits', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+
+      breaker.reset();
+
+      final result = await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(200),
+      );
+      expect(result.response.statusCode, equals(200));
+    });
+
+    test('RetryMiddleware does not retry CircuitOpenException', () async {
+      var calls = 0;
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          calls++;
+          return http.Response('down', 503);
+        }),
+        middlewares: [
+          RetryMiddleware(maxRetries: 5, delay: (_) => Duration.zero),
+          breaker,
+        ],
+      );
+
+      await expectLater(
+        client.get(Uri.parse('https://example.com')),
+        throwsA(isA<CircuitOpenException>()),
+      );
+
+      // First attempt opened the circuit; retries stopped immediately
+      expect(calls, equals(1));
+
+      client.close();
     });
   });
 
@@ -1001,11 +2157,1468 @@ void main() {
       await cache.clear();
 
       expect(cache.length, equals(0));
+      expect(cache.sizeInBytes, equals(0));
+    });
+
+    CachedResponse ofSize(int bytes) {
+      return CachedResponse(
+        statusCode: 200,
+        body: Uint8List(bytes),
+        headers: {},
+      );
+    }
+
+    test('tracks total size in bytes', () async {
+      final cache = InMemorySwrCache();
+
+      await cache.set('a', ofSize(100));
+      await cache.set('b', ofSize(50));
+      expect(cache.sizeInBytes, equals(150));
+
+      // Replacing an entry updates accounting
+      await cache.set('a', ofSize(30));
+      expect(cache.sizeInBytes, equals(80));
+
+      await cache.remove('b');
+      expect(cache.sizeInBytes, equals(30));
+    });
+
+    test('evicts least recently used entries over maxSizeBytes', () async {
+      final cache = InMemorySwrCache(maxSizeBytes: 250);
+
+      await cache.set('a', ofSize(100));
+      await cache.set('b', ofSize(100));
+      await cache.set('c', ofSize(100)); // 300 > 250: 'a' evicted
+
+      expect(await cache.get('a'), isNull);
+      expect(await cache.get('b'), isNotNull);
+      expect(await cache.get('c'), isNotNull);
+      expect(cache.sizeInBytes, equals(200));
+    });
+
+    test('get marks an entry as recently used', () async {
+      final cache = InMemorySwrCache(maxSizeBytes: 250);
+
+      await cache.set('a', ofSize(100));
+      await cache.set('b', ofSize(100));
+
+      // Touch 'a' so 'b' becomes the LRU entry
+      await cache.get('a');
+
+      await cache.set('c', ofSize(100)); // evicts 'b', not 'a'
+
+      expect(await cache.get('a'), isNotNull);
+      expect(await cache.get('b'), isNull);
+      expect(await cache.get('c'), isNotNull);
+    });
+
+    test('does not store a response larger than maxSizeBytes', () async {
+      final cache = InMemorySwrCache(maxSizeBytes: 100);
+
+      await cache.set('a', ofSize(50));
+      await cache.set('big', ofSize(200));
+
+      expect(await cache.get('big'), isNull);
+      // Other entries survive
+      expect(await cache.get('a'), isNotNull);
+      expect(cache.sizeInBytes, equals(50));
+    });
+
+    test('oversized response removes the stale entry under its key', () async {
+      final cache = InMemorySwrCache(maxSizeBytes: 100);
+
+      await cache.set('a', ofSize(50));
+      // The refreshed response no longer fits: the stale one must not
+      // be served forever
+      await cache.set('a', ofSize(200));
+
+      expect(await cache.get('a'), isNull);
+      expect(cache.sizeInBytes, equals(0));
+    });
+
+    test('evicts entries over maxEntries', () async {
+      final cache = InMemorySwrCache(maxEntries: 2);
+
+      await cache.set('a', ofSize(1));
+      await cache.set('b', ofSize(1));
+      await cache.set('c', ofSize(1));
+
+      expect(cache.length, equals(2));
+      expect(await cache.get('a'), isNull);
+      expect(await cache.get('b'), isNotNull);
+      expect(await cache.get('c'), isNotNull);
+    });
+  });
+
+  group('MiddlewareContext.cloneRequest', () {
+    test('clones Request with all fields', () {
+      final original = http.Request('POST', Uri.parse('https://example.com'))
+        ..headers['x-custom'] = 'value'
+        ..bodyBytes = utf8.encode('payload')
+        ..followRedirects = false
+        ..maxRedirects = 3
+        ..persistentConnection = false;
+
+      final clone = MiddlewareContext.cloneRequest(original) as http.Request;
+
+      expect(clone, isNot(same(original)));
+      expect(clone.method, equals('POST'));
+      expect(clone.url, equals(original.url));
+      expect(clone.headers['x-custom'], equals('value'));
+      expect(clone.bodyBytes, equals(original.bodyBytes));
+      expect(clone.followRedirects, isFalse);
+      expect(clone.maxRedirects, equals(3));
+      expect(clone.persistentConnection, isFalse);
+    });
+
+    test('clones a finalized Request', () {
+      final original = http.Request('GET', Uri.parse('https://example.com'));
+      original.finalize();
+
+      final clone = MiddlewareContext.cloneRequest(original);
+
+      // The clone must be sendable: finalize() works exactly once
+      expect(clone.finalize, returnsNormally);
+    });
+
+    test('clones MultipartRequest with fields and files', () {
+      final original =
+          http.MultipartRequest('POST', Uri.parse('https://example.com'))
+            ..headers['x-custom'] = 'value'
+            ..fields['name'] = 'test'
+            ..files.add(http.MultipartFile.fromBytes('file', [1, 2, 3]));
+
+      final clone =
+          MiddlewareContext.cloneRequest(original) as http.MultipartRequest;
+
+      expect(clone, isNot(same(original)));
+      expect(clone.headers['x-custom'], equals('value'));
+      expect(clone.fields['name'], equals('test'));
+      expect(clone.files, hasLength(1));
+    });
+
+    test('throws UnsupportedError for StreamedRequest', () {
+      final original = http.StreamedRequest(
+        'POST',
+        Uri.parse('https://example.com'),
+      );
+
+      expect(
+        () => MiddlewareContext.cloneRequest(original),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('throws UnsupportedError for unknown request types', () {
+      final original = _CustomRequest('GET', Uri.parse('https://example.com'));
+
+      expect(
+        () => MiddlewareContext.cloneRequest(original),
+        throwsUnsupportedError,
+      );
+    });
+
+    test('copyForBackground strips _isFromCache but keeps other metadata', () {
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+      context.markAsFromCache();
+      context.metadata['custom'] = 'kept';
+
+      final copy = context.copyForBackground();
+
+      expect(copy.isFromCache, isFalse);
+      expect(copy.metadata['custom'], equals('kept'));
+      expect(copy.request, isNot(same(context.request)));
+    });
+
+    test('toString includes method, url and metadata', () {
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com/x')),
+      );
+      context.metadata['k'] = 'v';
+
+      expect(context.toString(), contains('GET'));
+      expect(context.toString(), contains('https://example.com/x'));
+      expect(context.toString(), contains('k'));
+    });
+  });
+
+  group('edge cases: value types', () {
+    test(
+      'CachedResponse round-trips isRedirect and persistentConnection',
+      () async {
+        final source = http.StreamedResponse(
+          Stream.value(<int>[]),
+          302,
+          isRedirect: true,
+          persistentConnection: false,
+          reasonPhrase: 'Found',
+        );
+
+        final cached = await CachedResponse.fromStreamedResponse(source);
+        final restored = cached.toStreamedResponse();
+
+        expect(restored.isRedirect, isTrue);
+        expect(restored.persistentConnection, isFalse);
+        expect(restored.reasonPhrase, equals('Found'));
+      },
+    );
+
+    test('bodyString tolerates malformed UTF-8', () {
+      final cached = CachedResponse(
+        statusCode: 200,
+        body: Uint8List.fromList([0xFF, 0xFE, 0x41]),
+        headers: {},
+      );
+
+      expect(() => cached.bodyString, returnsNormally);
+      expect(cached.bodyString, contains('A'));
+    });
+
+    test('CachedResponse.toString reports status and size', () {
+      final cached = CachedResponse(
+        statusCode: 404,
+        body: Uint8List(7),
+        headers: {'a': '1'},
+      );
+
+      expect(cached.toString(), contains('404'));
+      expect(cached.toString(), contains('7'));
+    });
+
+    test('MiddlewareResponse default constructor carries continuation', () {
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+      final response = MiddlewareResponse(
+        response: http.StreamedResponse(Stream.value(<int>[]), 200),
+        backgroundContext: context,
+      );
+
+      expect(response.hasBackgroundContinuation, isTrue);
+      expect(response.toString(), contains('hasBackgroundContinuation: true'));
+    });
+
+    test('WatchEvent.toString reports status and source', () {
+      final event = WatchEvent(
+        response: http.Response('x', 200),
+        source: WatchSource.cacheRevalidating,
+      );
+
+      expect(event.toString(), contains('200'));
+      expect(event.toString(), contains('cacheRevalidating'));
+    });
+
+    test('CircuitOpenException.toString reports key and retryAfter', () {
+      final exception = CircuitOpenException(
+        key: 'https://example.com:443',
+        retryAfter: const Duration(seconds: 7),
+      );
+
+      expect(exception.toString(), contains('https://example.com:443'));
+      expect(exception.toString(), contains('0:00:07'));
+    });
+  });
+
+  group('edge cases: MiddlewareClient', () {
+    test('default constructor creates and closes an own inner client', () {
+      final client = MiddlewareClient();
+      expect(client.close, returnsNormally);
+    });
+
+    test('close closes inner and backgroundInner', () {
+      final inner = _TrackingClient();
+      final background = _TrackingClient();
+
+      MiddlewareClient(inner: inner, backgroundInner: background).close();
+
+      expect(inner.closed, isTrue);
+      expect(background.closed, isTrue);
+    });
+
+    test('background revalidation uses backgroundInner', () async {
+      var foregroundCalls = 0;
+      var backgroundCalls = 0;
+      final cache = InMemorySwrCache();
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          foregroundCalls++;
+          return http.Response('foreground', 200);
+        }),
+        backgroundInner: MockClient((request) async {
+          backgroundCalls++;
+          return http.Response('background', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+      expect(foregroundCalls, equals(1));
+      expect(backgroundCalls, equals(0));
+
+      // Cache hit: revalidation must go to the background client
+      await client.get(uri);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(foregroundCalls, equals(1));
+      expect(backgroundCalls, equals(1));
+
+      final cached = await cache.get('GET:$uri');
+      expect(cached!.bodyString, equals('background'));
+
+      client.close();
+    });
+
+    test(
+      'throwing onBackgroundError handler does not silence others',
+      () async {
+        var secondHandlerCalled = false;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            if (request.headers['x-background'] == 'true') {
+              throw http.ClientException('boom');
+            }
+            return http.Response('ok', 200);
+          }),
+          middlewares: [
+            _BackgroundErrorCaptureMiddleware((_) => throw StateError('bad')),
+            _BackgroundErrorCaptureMiddleware(
+              (_) => secondHandlerCalled = true,
+            ),
+            _BackgroundTriggerMiddleware(),
+          ],
+        );
+
+        await client.get(Uri.parse('https://example.com'));
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        expect(secondHandlerCalled, isTrue);
+
+        client.close();
+      },
+    );
+
+    test('watchGet applies headers', () async {
+      String? captured;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          captured = request.headers['x-token'];
+          return http.Response('ok', 200);
+        }),
+      );
+
+      await client
+          .watchGet(
+            Uri.parse('https://example.com'),
+            headers: {'x-token': 'abc'},
+          )
+          .drain<void>();
+
+      expect(captured, equals('abc'));
+
+      client.close();
+    });
+
+    test('watch emits failed revalidation response as network event', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          if (networkCalls > 1) {
+            return http.Response('server error', 500);
+          }
+          return http.Response('good', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      final events = await client.watchGet(uri).toList();
+
+      expect(events, hasLength(2));
+      expect(events[1].source, equals(WatchSource.network));
+      expect(events[1].response.statusCode, equals(500));
+
+      // The 500 must not overwrite the cached 200
+      final cached = await cache.get('GET:$uri');
+      expect(cached!.statusCode, equals(200));
+      expect(cached.bodyString, equals('good'));
+
+      client.close();
+    });
+
+    test(
+      'skipUnchanged emits when status differs but body is identical',
+      () async {
+        final cache = InMemorySwrCache();
+        var networkCalls = 0;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            networkCalls++;
+            return http.Response('same', networkCalls == 1 ? 200 : 404);
+          }),
+          middlewares: [SwrMiddleware(cache: cache)],
+        );
+
+        final uri = Uri.parse('https://example.com/data');
+        await client.get(uri);
+
+        final events = await client.watchGet(uri, skipUnchanged: true).toList();
+
+        expect(events, hasLength(2));
+        expect(events[1].response.statusCode, equals(404));
+
+        client.close();
+      },
+    );
+  });
+
+  group('edge cases: SwrMiddleware', () {
+    test(
+      'serves cache hit for unclonable request without revalidation',
+      () async {
+        final cache = InMemorySwrCache();
+        var networkCalls = 0;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            networkCalls++;
+            return http.Response('cached data', 200);
+          }),
+          middlewares: [SwrMiddleware(cache: cache)],
+        );
+
+        final uri = Uri.parse('https://example.com/data');
+        await client.get(uri);
+        expect(networkCalls, equals(1));
+
+        // StreamedRequest cannot be cloned for revalidation: the cached
+        // response must still be served instead of throwing
+        final streamedRequest = http.StreamedRequest('GET', uri);
+        unawaited(streamedRequest.sink.close());
+        final response = await client.send(streamedRequest);
+        final body = await response.stream.bytesToString();
+
+        expect(body, equals('cached data'));
+
+        await Future.delayed(const Duration(milliseconds: 100));
+        // No revalidation happened
+        expect(networkCalls, equals(1));
+
+        client.close();
+      },
+    );
+
+    test('failed revalidation keeps the stale cache entry', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          if (networkCalls > 1) {
+            return http.Response('oops', 503);
+          }
+          return http.Response('good', 200);
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      // Cache hit triggers a revalidation that returns 503
+      final response = await client.get(uri);
+      expect(response.body, equals('good'));
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(networkCalls, equals(2));
+      final cached = await cache.get('GET:$uri');
+      expect(cached!.bodyString, equals('good'));
+
+      client.close();
+    });
+
+    test('custom shouldCacheRequest enables caching POST', () async {
+      final cache = InMemorySwrCache();
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('ok', 200)),
+        middlewares: [
+          SwrMiddleware(cache: cache, shouldCacheRequest: (request) => true),
+        ],
+      );
+
+      await client.post(Uri.parse('https://example.com/data'));
+
+      expect(cache.length, equals(1));
+      expect(cache.keys.first, startsWith('POST:'));
+
+      client.close();
+    });
+
+    test('exposes cache key in context metadata', () async {
+      final middleware = SwrMiddleware(cache: InMemorySwrCache());
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com/data')),
+      );
+
+      await middleware.process(
+        context,
+        (ctx) async => MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(<int>[]), 200),
+        ),
+      );
+
+      expect(
+        context.metadata['swr:cacheKey'],
+        equals('GET:https://example.com/data'),
+      );
+    });
+  });
+
+  group('edge cases: DedupMiddleware', () {
+    test('leader with waiters keeps its background continuation', () async {
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+      final gate = Completer<MiddlewareResponse>();
+
+      final leader = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) => gate.future,
+      );
+      final waiter = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) async => fail('waiter must not reach next'),
+      );
+
+      expect(dedup.inFlightKeys, contains('GET:$uri'));
+
+      final backgroundContext = MiddlewareContext(
+        request: http.Request('GET', uri),
+      );
+      gate.complete(
+        MiddlewareResponse.withBackgroundContinuation(
+          response: http.StreamedResponse(Stream.value(utf8.encode('x')), 200),
+          backgroundContext: backgroundContext,
+        ),
+      );
+
+      final leaderResult = await leader;
+      final waiterResult = await waiter;
+
+      expect(leaderResult.hasBackgroundContinuation, isTrue);
+      expect(leaderResult.backgroundContext, same(backgroundContext));
+      // The waiter gets a plain shared response
+      expect(waiterResult.hasBackgroundContinuation, isFalse);
+    });
+
+    test('body stream error during buffering propagates to waiters', () async {
+      final dedup = DedupMiddleware();
+      final uri = Uri.parse('https://example.com/data');
+      final gate = Completer<MiddlewareResponse>();
+
+      final leader = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) => gate.future,
+      );
+      final waiter = dedup.process(
+        MiddlewareContext(request: http.Request('GET', uri)),
+        (ctx) async => fail('waiter must not reach next'),
+      );
+
+      gate.complete(
+        MiddlewareResponse.immediate(
+          http.StreamedResponse(
+            Stream.error(Exception('connection reset mid-body')),
+            200,
+          ),
+        ),
+      );
+
+      await expectLater(leader, throwsException);
+      await expectLater(waiter, throwsException);
+      expect(dedup.inFlightCount, equals(0));
+    });
+  });
+
+  group('edge cases: RetryMiddleware', () {
+    MiddlewareContext streamedContext() {
+      final request = http.StreamedRequest(
+        'GET',
+        Uri.parse('https://example.com'),
+      );
+      unawaited(request.sink.close());
+      return MiddlewareContext(request: request);
+    }
+
+    test('unclonable request is not retried on retriable response', () async {
+      var nextCalls = 0;
+      final retry = RetryMiddleware(delay: (_) => Duration.zero);
+
+      final result = await retry.process(streamedContext(), (ctx) async {
+        nextCalls++;
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(<int>[]), 503),
+        );
+      });
+
+      expect(nextCalls, equals(1));
+      expect(result.response.statusCode, equals(503));
+    });
+
+    test('unclonable request rethrows the original error', () async {
+      var nextCalls = 0;
+      final retry = RetryMiddleware(delay: (_) => Duration.zero);
+
+      await expectLater(
+        retry.process(streamedContext(), (ctx) async {
+          nextCalls++;
+          throw http.ClientException('network down');
+        }),
+        throwsA(isA<http.ClientException>()),
+      );
+      expect(nextCalls, equals(1));
+    });
+
+    test('delay receives 1-based attempt numbers', () async {
+      final attempts = <int>[];
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async => http.Response('unavailable', 503)),
+        middlewares: [
+          RetryMiddleware(
+            maxRetries: 2,
+            delay: (attempt) {
+              attempts.add(attempt);
+              return Duration.zero;
+            },
+          ),
+        ],
+      );
+
+      await client.get(Uri.parse('https://example.com'));
+
+      expect(attempts, equals([1, 2]));
+
+      client.close();
+    });
+
+    test('retries 408 and 429 by default', () async {
+      for (final status in [408, 429]) {
+        var calls = 0;
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            calls++;
+            return calls == 1
+                ? http.Response('retry me', status)
+                : http.Response('ok', 200);
+          }),
+          middlewares: [RetryMiddleware(delay: (_) => Duration.zero)],
+        );
+
+        final response = await client.get(Uri.parse('https://example.com'));
+
+        expect(response.statusCode, equals(200), reason: 'status $status');
+        expect(calls, equals(2), reason: 'status $status');
+
+        client.close();
+      }
+    });
+
+    test('does not retry responses served from cache', () async {
+      var nextCalls = 0;
+      final retry = RetryMiddleware(delay: (_) => Duration.zero);
+      final context = MiddlewareContext(
+        request: http.Request('GET', Uri.parse('https://example.com')),
+      );
+
+      final result = await retry.process(context, (ctx) async {
+        nextCalls++;
+        ctx.markAsFromCache();
+        return MiddlewareResponse.immediate(
+          http.StreamedResponse(Stream.value(<int>[]), 503),
+        );
+      });
+
+      expect(nextCalls, equals(1));
+      expect(result.response.statusCode, equals(503));
+    });
+  });
+
+  group('edge cases: CircuitBreakerMiddleware', () {
+    MiddlewareContext contextFor(String url) {
+      return MiddlewareContext(request: http.Request('GET', Uri.parse(url)));
+    }
+
+    Future<MiddlewareResponse> respond(int status) async {
+      return MiddlewareResponse.immediate(
+        http.StreamedResponse(Stream.value(<int>[]), status),
+      );
+    }
+
+    test('late failure after the circuit opened is ignored', () async {
+      final transitions = <String>[];
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        onStateChange: (key, from, to) => transitions.add('$from->$to'),
+      );
+      final gate = Completer<MiddlewareResponse>();
+
+      // Slow request enters while the circuit is still closed
+      final slow = breaker.process(
+        contextFor('https://example.com/slow'),
+        (ctx) => gate.future,
+      );
+
+      // Another request opens the circuit
+      await breaker.process(
+        contextFor('https://example.com/fast'),
+        (ctx) => respond(500),
+      );
+      expect(transitions, hasLength(1));
+
+      // The slow request completes with a failure - no double transition
+      gate.complete(await respond(500));
+      await slow;
+
+      expect(transitions, hasLength(1));
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+    });
+
+    test('late success after the circuit opened does not close it', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+      final gate = Completer<MiddlewareResponse>();
+
+      final slow = breaker.process(
+        contextFor('https://example.com/slow'),
+        (ctx) => gate.future,
+      );
+
+      await breaker.process(
+        contextFor('https://example.com/fast'),
+        (ctx) => respond(500),
+      );
+
+      gate.complete(await respond(200));
+      await slow;
+
+      // Only a successful probe may close the circuit
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+    });
+
+    test('reset(key) closes only that circuit', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await breaker.process(
+        contextFor('https://a.example.com'),
+        (ctx) => respond(500),
+      );
+      await breaker.process(
+        contextFor('https://b.example.com'),
+        (ctx) => respond(500),
+      );
+
+      breaker.reset('https://a.example.com:443');
+
+      expect(
+        breaker.stateForKey('https://a.example.com:443'),
+        equals(CircuitState.closed),
+      );
+      expect(
+        breaker.stateForKey('https://b.example.com:443'),
+        equals(CircuitState.open),
+      );
+    });
+
+    test('throwing onStateChange listener does not break processing', () async {
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        onStateChange: (key, from, to) => throw StateError('listener bug'),
+      );
+
+      // Transition happens inside process - must not throw
+      final result = await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+
+      expect(result.response.statusCode, equals(500));
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.open),
+      );
+    });
+
+    test('non-failure errors do not trip the circuit', () async {
+      final breaker = CircuitBreakerMiddleware(failureThreshold: 1);
+
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => throw ArgumentError('programming bug, not backend'),
+        ),
+        throwsArgumentError,
+      );
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+
+    test('halfOpenProbes allows multiple concurrent probes', () async {
+      var current = DateTime(2026, 1, 1);
+      final breaker = CircuitBreakerMiddleware(
+        failureThreshold: 1,
+        halfOpenProbes: 2,
+        openDuration: const Duration(seconds: 30),
+        now: () => current,
+      );
+
+      await breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => respond(500),
+      );
+      current = current.add(const Duration(seconds: 31));
+
+      final gate1 = Completer<MiddlewareResponse>();
+      final gate2 = Completer<MiddlewareResponse>();
+      final probe1 = breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => gate1.future,
+      );
+      final probe2 = breaker.process(
+        contextFor('https://example.com'),
+        (ctx) => gate2.future,
+      );
+
+      // Third concurrent request exceeds the probe budget
+      await expectLater(
+        breaker.process(
+          contextFor('https://example.com'),
+          (ctx) => respond(200),
+        ),
+        throwsA(isA<CircuitOpenException>()),
+      );
+
+      gate1.complete(await respond(200));
+      gate2.complete(await respond(200));
+      await probe1;
+      await probe2;
+
+      expect(
+        breaker.stateForKey('https://example.com:443'),
+        equals(CircuitState.closed),
+      );
+    });
+  });
+
+  group('edge cases: LoggingMiddleware', () {
+    test('includeHeaders logs request and response headers', () async {
+      final logs = <String>[];
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          return http.Response('ok', 200, headers: {'x-resp': 'pong'});
+        }),
+        middlewares: [LoggingMiddleware(onLog: logs.add, includeHeaders: true)],
+      );
+
+      await client.get(
+        Uri.parse('https://example.com'),
+        headers: {'x-req': 'ping'},
+      );
+
+      expect(logs.join('\n'), contains('x-req: ping'));
+      expect(logs.join('\n'), contains('x-resp: pong'));
+
+      client.close();
+    });
+
+    test('logs and rethrows errors', () async {
+      final logs = <String>[];
+
+      await expectLater(
+        LoggingMiddleware(onLog: logs.add).process(
+          MiddlewareContext(
+            request: http.Request('GET', Uri.parse('https://example.com')),
+          ),
+          (ctx) => throw http.ClientException('boom'),
+        ),
+        throwsA(isA<http.ClientException>()),
+      );
+
+      expect(logs.last, contains('ERROR'));
+      expect(logs.last, contains('boom'));
+    });
+
+    test('falls back to print without onLog', () async {
+      final prints = <String>[];
+
+      await runZoned(
+        () => const LoggingMiddleware().process(
+          MiddlewareContext(
+            request: http.Request('GET', Uri.parse('https://example.com')),
+          ),
+          (ctx) async => MiddlewareResponse.immediate(
+            http.StreamedResponse(Stream.value(<int>[]), 200),
+          ),
+        ),
+        zoneSpecification: ZoneSpecification(
+          print: (self, parent, zone, line) => prints.add(line),
+        ),
+      );
+
+      expect(prints, hasLength(2));
+      expect(prints[0], contains('-->'));
+      expect(prints[1], contains('<--'));
+    });
+
+    test('onBackgroundError logs the failed request', () {
+      final logs = <String>[];
+      final middleware = LoggingMiddleware(onLog: logs.add);
+
+      middleware.onBackgroundError(
+        Exception('timeout'),
+        StackTrace.current,
+        MiddlewareContext(
+          request: http.Request('GET', Uri.parse('https://example.com/bg')),
+        ),
+      );
+
+      expect(logs.single, contains('[BG]'));
+      expect(logs.single, contains('https://example.com/bg'));
+      expect(logs.single, contains('timeout'));
+    });
+  });
+
+  group('integration: composed chains', () {
+    test('timeout counts as a circuit breaker failure', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          await Future.delayed(const Duration(milliseconds: 200));
+          return http.Response('slow', 200);
+        }),
+        middlewares: [
+          CircuitBreakerMiddleware(failureThreshold: 1),
+          const TimeoutMiddleware(Duration(milliseconds: 20)),
+        ],
+      );
+
+      final uri = Uri.parse('https://example.com');
+
+      await expectLater(client.get(uri), throwsA(isA<TimeoutException>()));
+
+      // The timeout tripped the circuit: next request fails fast
+      await expectLater(client.get(uri), throwsA(isA<CircuitOpenException>()));
+
+      client.close();
+    });
+
+    test('dedup and SWR share one network call on a cold cache', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          await Future.delayed(const Duration(milliseconds: 30));
+          return http.Response('shared', 200);
+        }),
+        middlewares: [
+          DedupMiddleware(),
+          SwrMiddleware(cache: cache),
+        ],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      final responses = await Future.wait([
+        client.get(uri),
+        client.get(uri),
+        client.get(uri),
+      ]);
+
+      expect(networkCalls, equals(1));
+      for (final response in responses) {
+        expect(response.body, equals('shared'));
+      }
+      expect(cache.length, equals(1));
+
+      client.close();
+    });
+
+    test('standard chain serves watch with cache and revalidation', () async {
+      var networkCalls = 0;
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('response $networkCalls', 200);
+        }),
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      final events = await client.watchGet(uri).toList();
+
+      expect(events, hasLength(2));
+      expect(events[0].source, equals(WatchSource.cacheRevalidating));
+      expect(events[0].response.body, equals('response 1'));
+      expect(events[1].source, equals(WatchSource.network));
+      expect(events[1].response.body, equals('response 2'));
+
+      client.close();
+    });
+  });
+
+  group('documented guarantees', () {
+    test(
+      'SWR serves cache while the circuit is open (graceful degradation)',
+      () async {
+        final cache = InMemorySwrCache();
+        var networkCalls = 0;
+        var backendDown = false;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            networkCalls++;
+            if (backendDown) {
+              return http.Response('down', 503);
+            }
+            return http.Response('healthy', 200);
+          }),
+          middlewares: [
+            SwrMiddleware(cache: cache),
+            CircuitBreakerMiddleware(failureThreshold: 1),
+          ],
+        );
+
+        final cachedUri = Uri.parse('https://example.com/cached');
+        final missUri = Uri.parse('https://example.com/miss');
+        final missUri2 = Uri.parse('https://example.com/miss2');
+
+        // Populate the cache while the backend is healthy
+        await client.get(cachedUri);
+        expect(networkCalls, equals(1));
+
+        // Backend dies; a cache miss opens the circuit
+        backendDown = true;
+        final missResponse = await client.get(missUri);
+        expect(missResponse.statusCode, equals(503));
+        expect(networkCalls, equals(2));
+
+        // Cached data is still served instantly despite the open circuit
+        final cachedResponse = await client.get(cachedUri);
+        expect(cachedResponse.body, equals('healthy'));
+
+        // The background revalidation was rejected by the breaker silently
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(networkCalls, equals(2));
+        final cached = await cache.get('GET:$cachedUri');
+        expect(cached!.bodyString, equals('healthy'));
+
+        // Only cache misses fail fast
+        await expectLater(
+          client.get(missUri2),
+          throwsA(isA<CircuitOpenException>()),
+        );
+
+        client.close();
+      },
+    );
+
+    test('background failure in an outer middleware releases the SWR '
+        'revalidation lock', () async {
+      final cache = InMemorySwrCache();
+      var backgroundAttempts = 0;
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          // Fails background passes BEFORE they reach SwrMiddleware
+          _FailInBackgroundMiddleware(
+            onBackgroundAttempt: () {
+              backgroundAttempts++;
+            },
+          ),
+          SwrMiddleware(cache: cache),
+        ],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+      expect(networkCalls, equals(1));
+
+      // Cache hit: revalidation starts and dies in the outer middleware
+      await client.get(uri);
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(backgroundAttempts, equals(1));
+
+      // The lock must be released: the next cache hit revalidates again.
+      // A leaked lock would make backgroundAttempts stay at 1 forever.
+      await client.get(uri);
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(backgroundAttempts, equals(2));
+
+      client.close();
+    });
+
+    test(
+      'failed network revalidation releases the SWR lock via send',
+      () async {
+        final cache = InMemorySwrCache();
+        var networkCalls = 0;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            networkCalls++;
+            if (networkCalls > 1) {
+              throw http.ClientException('down');
+            }
+            return http.Response('good', 200);
+          }),
+          middlewares: [SwrMiddleware(cache: cache)],
+        );
+
+        final uri = Uri.parse('https://example.com/data');
+        await client.get(uri);
+
+        // Two cache hits, each must attempt its own revalidation
+        final r1 = await client.get(uri);
+        expect(r1.body, equals('good'));
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(networkCalls, equals(2));
+
+        final r2 = await client.get(uri);
+        expect(r2.body, equals('good'));
+        await Future.delayed(const Duration(milliseconds: 100));
+        expect(networkCalls, equals(3));
+
+        client.close();
+      },
+    );
+
+    test('revalidation picks up a refreshed auth token', () async {
+      final cache = InMemorySwrCache();
+      var tokenVersion = 0;
+      final sentTokens = <String?>[];
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          sentTokens.add(request.headers['authorization']);
+          return http.Response('ok', 200);
+        }),
+        middlewares: [
+          HeadersMiddleware.builder((request) async {
+            tokenVersion++;
+            return {'authorization': 'Bearer token-$tokenVersion'};
+          }),
+          SwrMiddleware(cache: cache),
+        ],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+      // Cache hit: the revalidation re-runs the whole chain and must
+      // carry a freshly built token, not the one from the first request
+      await client.get(uri);
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      expect(sentTokens, hasLength(2));
+      expect(sentTokens[0], equals('Bearer token-1'));
+      expect(sentTokens[1], isNot(equals('Bearer token-1')));
+
+      client.close();
+    });
+
+    test(
+      'retry preserves the request body and headers across attempts',
+      () async {
+        final sentBodies = <String>[];
+        final sentHeaders = <String?>[];
+        var calls = 0;
+
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            calls++;
+            sentBodies.add(request.body);
+            sentHeaders.add(request.headers['x-signed']);
+            return calls == 1
+                ? http.Response('unavailable', 503)
+                : http.Response('ok', 200);
+          }),
+          middlewares: [
+            HeadersMiddleware({'x-signed': 'signature'}),
+            RetryMiddleware(
+              shouldRetryRequest: (request) => true,
+              delay: (_) => Duration.zero,
+            ),
+          ],
+        );
+
+        final response = await client.post(
+          Uri.parse('https://example.com/submit'),
+          body: 'important payload',
+        );
+
+        expect(response.statusCode, equals(200));
+        expect(sentBodies, equals(['important payload', 'important payload']));
+        expect(sentHeaders, equals(['signature', 'signature']));
+
+        client.close();
+      },
+    );
+
+    test('binary body survives the cache round-trip byte for byte', () async {
+      final payload = Uint8List.fromList(
+        List.generate(64 * 1024, (i) => i % 251),
+      );
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          return http.Response.bytes(payload, 200);
+        }),
+        middlewares: [SwrMiddleware(cache: InMemorySwrCache())],
+      );
+
+      final uri = Uri.parse('https://example.com/blob');
+      final fresh = await client.get(uri);
+      expect(fresh.bodyBytes, equals(payload));
+
+      // Served from cache
+      final cached = await client.get(uri);
+      expect(cached.bodyBytes, equals(payload));
+
+      client.close();
+    });
+
+    test('non-ASCII body survives the cache round-trip', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          return http.Response(
+            'Привет, мир! 你好 🎉',
+            200,
+            headers: {'content-type': 'text/plain; charset=utf-8'},
+          );
+        }),
+        middlewares: [SwrMiddleware(cache: InMemorySwrCache())],
+      );
+
+      final uri = Uri.parse('https://example.com/text');
+      await client.get(uri);
+      final cached = await client.get(uri);
+
+      expect(cached.body, equals('Привет, мир! 你好 🎉'));
+
+      client.close();
+    });
+
+    test('response headers survive the cache round-trip', () async {
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          return http.Response(
+            '{}',
+            200,
+            headers: {'content-type': 'application/json', 'etag': '"abc123"'},
+          );
+        }),
+        middlewares: [SwrMiddleware(cache: InMemorySwrCache())],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+      final cached = await client.get(uri);
+
+      expect(cached.headers['content-type'], equals('application/json'));
+      expect(cached.headers['etag'], equals('"abc123"'));
+
+      client.close();
+    });
+
+    test('watch on a non-cacheable request emits one network event', () async {
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response('created', 201);
+        }),
+        middlewares: [SwrMiddleware(cache: InMemorySwrCache())],
+      );
+
+      final request = http.Request(
+        'POST',
+        Uri.parse('https://example.com/items'),
+      );
+      final events = await client.watch(request).toList();
+
+      expect(events, hasLength(1));
+      expect(events.single.source, equals(WatchSource.network));
+      expect(events.single.response.statusCode, equals(201));
+      expect(networkCalls, equals(1));
+
+      client.close();
+    });
+
+    test(
+      'watch on a cold cache with a dead network emits only an error',
+      () async {
+        final client = MiddlewareClient(
+          inner: MockClient((request) async {
+            throw http.ClientException('no connection');
+          }),
+          middlewares: [SwrMiddleware(cache: InMemorySwrCache())],
+        );
+
+        await expectLater(
+          client.watchGet(Uri.parse('https://example.com')),
+          emitsError(isA<http.ClientException>()),
+        );
+
+        client.close();
+      },
+    );
+
+    test('timeout covers headers arrival, not the body download', () async {
+      final client = MiddlewareClient(
+        inner: _SlowBodyClient(),
+        middlewares: [const TimeoutMiddleware(Duration(milliseconds: 30))],
+      );
+
+      // Headers arrive instantly, the body takes ~100ms: must not throw
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.body, equals('slow body'));
+
+      client.close();
+    });
+
+    test('standard with maxRetries: 0 does not retry', () async {
+      var calls = 0;
+
+      final client = MiddlewareClient.standard(
+        inner: MockClient((request) async {
+          calls++;
+          return http.Response('unavailable', 503);
+        }),
+        maxRetries: 0,
+      );
+
+      final response = await client.get(Uri.parse('https://example.com'));
+
+      expect(response.statusCode, equals(503));
+      expect(calls, equals(1));
+
+      client.close();
+    });
+
+    test('skipUnchanged treats header-only changes as unchanged', () async {
+      final cache = InMemorySwrCache();
+      var networkCalls = 0;
+
+      final client = MiddlewareClient(
+        inner: MockClient((request) async {
+          networkCalls++;
+          return http.Response(
+            'same',
+            200,
+            headers: {'x-generation': '$networkCalls'},
+          );
+        }),
+        middlewares: [SwrMiddleware(cache: cache)],
+      );
+
+      final uri = Uri.parse('https://example.com/data');
+      await client.get(uri);
+
+      // Same status and body, only headers differ: suppressed by contract
+      final events = await client.watchGet(uri, skipUnchanged: true).toList();
+
+      expect(events, hasLength(1));
+
+      client.close();
     });
   });
 }
 
 // Test helpers
+
+class _FailInBackgroundMiddleware extends HttpMiddleware {
+  _FailInBackgroundMiddleware({required this.onBackgroundAttempt});
+
+  final void Function() onBackgroundAttempt;
+
+  @override
+  Future<MiddlewareResponse> process(
+    MiddlewareContext context,
+    MiddlewareNext next,
+  ) {
+    if (context.isBackground) {
+      onBackgroundAttempt();
+      throw http.ClientException('outer middleware failure');
+    }
+    return next(context);
+  }
+}
+
+class _SlowBodyClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    Stream<List<int>> body() async* {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      yield utf8.encode('slow body');
+    }
+
+    return http.StreamedResponse(body(), 200);
+  }
+}
+
+class _CustomRequest extends http.BaseRequest {
+  _CustomRequest(super.method, super.url);
+
+  @override
+  http.ByteStream finalize() {
+    super.finalize();
+    return http.ByteStream.fromBytes(const []);
+  }
+}
+
+class _TrackingClient extends http.BaseClient {
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(Stream.value(const <int>[]), 200);
+  }
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
+  }
+}
 
 class _OrderTrackingMiddleware extends HttpMiddleware {
   const _OrderTrackingMiddleware(this.name, this.order);
@@ -1080,22 +3693,52 @@ class _ErrorHandlingMiddleware extends HttpMiddleware {
   }
 
   @override
-  void onBackgroundError(Object error, StackTrace stackTrace) {
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
     onError();
   }
 }
 
-class _ContextCaptureMiddleware extends HttpMiddleware {
-  _ContextCaptureMiddleware(this.contexts);
+class _BackgroundErrorCaptureMiddleware extends HttpMiddleware {
+  _BackgroundErrorCaptureMiddleware(this.onBackgroundErrorContext);
 
-  final List<MiddlewareContext> contexts;
+  final void Function(MiddlewareContext context) onBackgroundErrorContext;
 
   @override
   Future<MiddlewareResponse> process(
     MiddlewareContext context,
     MiddlewareNext next,
   ) {
-    contexts.add(context);
+    return next(context);
+  }
+
+  @override
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
+    onBackgroundErrorContext(context);
+  }
+}
+
+class _ContextCaptureMiddleware extends HttpMiddleware {
+  _ContextCaptureMiddleware(this.contexts, {this.onlyBackground = false});
+
+  final List<MiddlewareContext> contexts;
+  final bool onlyBackground;
+
+  @override
+  Future<MiddlewareResponse> process(
+    MiddlewareContext context,
+    MiddlewareNext next,
+  ) {
+    if (!onlyBackground || context.isBackground) {
+      contexts.add(context);
+    }
     return next(context);
   }
 }

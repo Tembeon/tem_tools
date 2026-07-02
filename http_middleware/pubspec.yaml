@@ -1,13 +1,16 @@
 name: http_middleware
-description: A starting point for Dart libraries or applications.
-version: 1.0.0
-# repository: https://github.com/my_org/my_repo
+description: >-
+  Composable middleware for package:http with built-in SWR caching,
+  request deduplication and background revalidation.
+version: 2.0.0
+repository: https://github.com/tembeon/tem_tools
 
 environment:
   sdk: '>=3.10.1 <4.0.0'
 
 dependencies:
-  http: any
+  collection: ^1.18.0
+  http: ^1.0.0
 
 dev_dependencies:
   lints: ^6.0.0

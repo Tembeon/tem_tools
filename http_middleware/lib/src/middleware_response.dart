@@ -38,10 +38,7 @@ class MiddlewareResponse {
   ///
   /// [response] is the HTTP response to return to the caller.
   /// [backgroundContext] optionally specifies a context for background continuation.
-  const MiddlewareResponse({
-    required this.response,
-    this.backgroundContext,
-  });
+  const MiddlewareResponse({required this.response, this.backgroundContext});
 
   /// Creates a simple response without background continuation.
   ///

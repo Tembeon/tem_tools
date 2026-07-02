@@ -105,10 +105,23 @@ Future<void> middlewareChainExample() async {
       TimingMiddleware(),
       // 2. Logging - logs request/response
       LoggingMiddleware(),
-      // 3. Auth - adds authorization header
-      AuthMiddleware(token: 'bearer-token'),
-      // 4. Retry - handles transient failures
+      // 3. Default headers - adds auth without a custom class
+      HeadersMiddleware({'Authorization': 'Bearer bearer-token'}),
+      // 4. Inline middleware - one-off logic without a class
+      InlineMiddleware.onResponse((response, context) {
+        if (response.statusCode == 401) {
+          print('[AUTH] Token rejected');
+        }
+      }),
+      // 5. Retry - handles transient failures
       RetryMiddleware(maxRetries: 2),
+      // 6. Circuit breaker - fails fast when the backend keeps failing
+      CircuitBreakerMiddleware(
+        failureThreshold: 5,
+        openDuration: const Duration(seconds: 30),
+      ),
+      // 7. Timeout - bounds how long a request may take
+      TimeoutMiddleware(const Duration(seconds: 10)),
     ],
   );
 
@@ -172,42 +185,5 @@ class TimingMiddleware extends HttpMiddleware {
       print('[TIMING] Request failed after ${stopwatch.elapsedMilliseconds}ms');
       rethrow;
     }
-  }
-}
-
-/// A middleware that retries failed requests.
-class RetryMiddleware extends HttpMiddleware {
-  const RetryMiddleware({this.maxRetries = 3});
-
-  final int maxRetries;
-
-  @override
-  Future<MiddlewareResponse> process(
-    MiddlewareContext context,
-    MiddlewareNext next,
-  ) async {
-    var lastError = Object();
-    StackTrace lastStackTrace = StackTrace.current;
-
-    for (var attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        if (attempt > 0) {
-          print('[RETRY] Attempt ${attempt + 1}/${maxRetries + 1}');
-          // Exponential backoff
-          await Future.delayed(Duration(milliseconds: 100 * (1 << attempt)));
-        }
-
-        return await next(context);
-      } catch (e, st) {
-        lastError = e;
-        lastStackTrace = st;
-
-        if (attempt == maxRetries) {
-          break;
-        }
-      }
-    }
-
-    Error.throwWithStackTrace(lastError, lastStackTrace);
   }
 }

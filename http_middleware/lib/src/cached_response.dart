@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -41,6 +42,7 @@ class CachedResponse {
     this.contentLength,
     this.isRedirect = false,
     this.persistentConnection = true,
+    this.cachedAt,
   });
 
   /// Creates a [CachedResponse] from an [http.StreamedResponse].
@@ -70,6 +72,7 @@ class CachedResponse {
       contentLength: response.contentLength,
       isRedirect: response.isRedirect,
       persistentConnection: response.persistentConnection,
+      cachedAt: DateTime.now(),
     );
   }
 
@@ -94,10 +97,24 @@ class CachedResponse {
   /// Whether the connection is persistent.
   final bool persistentConnection;
 
+  /// When this response was captured from the network.
+  ///
+  /// Set automatically by [fromStreamedResponse]. Useful for implementing
+  /// TTL or staleness checks in cache backends. Null for manually
+  /// constructed instances that don't provide it.
+  final DateTime? cachedAt;
+
   /// Creates a new [http.StreamedResponse] from the cached data.
   ///
   /// Each call creates a fresh response with a new stream,
   /// so this can be called multiple times.
+  ///
+  /// The response's `contentLength` is always the buffered body length:
+  /// the original value may describe the compressed body, while [body]
+  /// holds the decoded bytes.
+  ///
+  /// [request] is optionally attached to the response so consumers can
+  /// read `response.request` as they would for a network response.
   ///
   /// Example:
   /// ```dart
@@ -106,22 +123,23 @@ class CachedResponse {
   ///   return MiddlewareResponse(response: cached.toStreamedResponse());
   /// }
   /// ```
-  http.StreamedResponse toStreamedResponse() {
+  http.StreamedResponse toStreamedResponse({http.BaseRequest? request}) {
     return http.StreamedResponse(
       Stream.value(body),
       statusCode,
       headers: headers,
       reasonPhrase: reasonPhrase,
-      contentLength: contentLength ?? body.length,
+      contentLength: body.length,
       isRedirect: isRedirect,
       persistentConnection: persistentConnection,
+      request: request,
     );
   }
 
   /// Returns the body as a UTF-8 decoded string.
   ///
   /// Useful for debugging or when you know the response is text.
-  String get bodyString => String.fromCharCodes(body);
+  String get bodyString => utf8.decode(body, allowMalformed: true);
 
   /// Returns the size of the cached body in bytes.
   int get sizeInBytes => body.length;

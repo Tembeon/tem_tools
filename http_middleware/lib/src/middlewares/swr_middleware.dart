@@ -160,10 +160,9 @@ class SwrMiddleware extends HttpMiddleware {
     CacheKeyGenerator? cacheKeyGenerator,
     ShouldCacheRequest? shouldCacheRequest,
     ShouldCacheResponse? shouldCacheResponse,
-  })  : cacheKeyGenerator = cacheKeyGenerator ?? _defaultCacheKey,
-        shouldCacheRequest = shouldCacheRequest ?? _defaultShouldCacheRequest,
-        shouldCacheResponse =
-            shouldCacheResponse ?? _defaultShouldCacheResponse;
+  }) : cacheKeyGenerator = cacheKeyGenerator ?? _defaultCacheKey,
+       shouldCacheRequest = shouldCacheRequest ?? _defaultShouldCacheRequest,
+       shouldCacheResponse = shouldCacheResponse ?? _defaultShouldCacheResponse;
 
   /// The cache backend.
   final SwrCache cache;
@@ -176,6 +175,12 @@ class SwrMiddleware extends HttpMiddleware {
 
   /// Function to determine if a response should be cached.
   final ShouldCacheResponse shouldCacheResponse;
+
+  /// Cache keys with a revalidation currently in flight.
+  ///
+  /// Prevents a revalidation stampede: concurrent cache hits for the
+  /// same key trigger only one background request.
+  final Set<String> _revalidating = {};
 
   static String _defaultCacheKey(http.BaseRequest request) {
     return '${request.method}:${request.url}';
@@ -194,10 +199,6 @@ class SwrMiddleware extends HttpMiddleware {
     MiddlewareContext context,
     MiddlewareNext next,
   ) async {
-    // Don't cache if this is a background revalidation
-    // (we'll cache the result after the request completes)
-    final isBackground = context.isBackground;
-
     // Check if this request should be cached
     if (!shouldCacheRequest(context.request)) {
       return next(context);
@@ -208,90 +209,104 @@ class SwrMiddleware extends HttpMiddleware {
     // Store cache key in metadata for other middlewares (e.g., cache tags)
     context.metadata['swr:cacheKey'] = cacheKey;
 
-    // If this is a background request, just update the cache
-    if (isBackground) {
-      return _handleBackgroundRequest(context, next, cacheKey);
+    // If this is a background revalidation, just update the cache
+    if (context.isBackground) {
+      try {
+        return await _fetchAndCache(context, next, cacheKey);
+      } finally {
+        _revalidating.remove(cacheKey);
+      }
     }
 
     // Try to get cached response
     final cached = await cache.get(cacheKey);
 
-    if (cached != null) {
-      // Cache hit! Return immediately and revalidate in background
+    // Cache miss - proceed to network and cache the result
+    if (cached == null) {
+      return _fetchAndCache(context, next, cacheKey);
+    }
+
+    // Cache hit! Return immediately and revalidate in background,
+    // unless a revalidation for this key is already in flight.
+    if (_revalidating.contains(cacheKey)) {
       context.markAsFromCache();
-
-      // Create background context for revalidation
-      // Use copyForBackground to clone the request so it can be sent again
-      final backgroundContext = context.copyForBackground();
-      backgroundContext.metadata['swr:revalidating'] = true;
-
-      return MiddlewareResponse.withBackgroundContinuation(
-        response: cached.toStreamedResponse(),
-        backgroundContext: backgroundContext,
+      return MiddlewareResponse.immediate(
+        cached.toStreamedResponse(request: context.request),
       );
     }
 
-    // Cache miss - proceed to network and cache the result
-    return _handleCacheMiss(context, next, cacheKey);
+    // Clone the request so it can be sent again in the background.
+    final MiddlewareContext backgroundContext;
+    try {
+      backgroundContext = context.copyForBackground();
+    } on UnsupportedError {
+      // The request cannot be cloned (e.g., StreamedRequest):
+      // serve from cache without revalidation instead of failing.
+      context.markAsFromCache();
+      return MiddlewareResponse.immediate(
+        cached.toStreamedResponse(request: context.request),
+      );
+    }
+    backgroundContext.metadata['swr:revalidating'] = true;
+
+    context.markAsFromCache();
+    _revalidating.add(cacheKey);
+
+    return MiddlewareResponse.withBackgroundContinuation(
+      response: cached.toStreamedResponse(request: context.request),
+      backgroundContext: backgroundContext,
+    );
   }
 
-  Future<MiddlewareResponse> _handleBackgroundRequest(
+  Future<MiddlewareResponse> _fetchAndCache(
     MiddlewareContext context,
     MiddlewareNext next,
     String cacheKey,
   ) async {
     final response = await next(context);
 
-    // Cache the response if it's cacheable
-    if (shouldCacheResponse(response.response)) {
-      final cached =
-          await CachedResponse.fromStreamedResponse(response.response);
-      await cache.set(cacheKey, cached);
-
-      // Return a new response since we consumed the original stream
-      return MiddlewareResponse.immediate(cached.toStreamedResponse());
+    if (!shouldCacheResponse(response.response)) {
+      return response;
     }
 
-    return response;
-  }
+    final cached = await CachedResponse.fromStreamedResponse(response.response);
+    await cache.set(cacheKey, cached);
 
-  Future<MiddlewareResponse> _handleCacheMiss(
-    MiddlewareContext context,
-    MiddlewareNext next,
-    String cacheKey,
-  ) async {
-    final response = await next(context);
-
-    // Cache successful responses
-    if (shouldCacheResponse(response.response)) {
-      final cached =
-          await CachedResponse.fromStreamedResponse(response.response);
-      await cache.set(cacheKey, cached);
-
-      // Return a new response since we consumed the original stream
-      return MiddlewareResponse.immediate(cached.toStreamedResponse());
-    }
-
-    return response;
+    // Return a new response since we consumed the original stream
+    return MiddlewareResponse.immediate(
+      cached.toStreamedResponse(request: context.request),
+    );
   }
 
   @override
-  void onBackgroundError(Object error, StackTrace stackTrace) {
+  void onBackgroundError(
+    Object error,
+    StackTrace stackTrace,
+    MiddlewareContext context,
+  ) {
     // Background revalidation failures are expected sometimes
     // (network issues, server errors, etc.)
-    // The stale cache entry remains valid for future requests
+    // The stale cache entry remains valid for future requests.
+    // Release the revalidation lock even if the chain failed before
+    // reaching this middleware.
+    final cacheKey = context.metadata['swr:cacheKey'];
+    if (cacheKey is String) {
+      _revalidating.remove(cacheKey);
+    }
   }
 }
 
-/// A simple in-memory implementation of [SwrCache].
+/// A simple in-memory implementation of [SwrCache] with optional
+/// LRU eviction.
 ///
-/// Useful for testing and simple applications. For production,
-/// consider using a persistent cache like SQLite.
+/// When [maxSizeBytes] or [maxEntries] is set, the least recently used
+/// entries are evicted once the limit is exceeded. Reading an entry via
+/// [get] marks it as recently used.
 ///
 /// ## Usage
 ///
 /// ```dart
-/// final cache = InMemorySwrCache();
+/// final cache = InMemorySwrCache(maxSizeBytes: 8 * 1024 * 1024); // 8 MiB
 /// final client = MiddlewareClient(
 ///   middlewares: [SwrMiddleware(cache: cache)],
 /// );
@@ -300,34 +315,105 @@ class SwrMiddleware extends HttpMiddleware {
 /// ## Limitations
 ///
 /// - No persistence: cache is lost when the app restarts
-/// - No size limits: can grow unbounded
-/// - No TTL: entries never expire automatically
+/// - No TTL: entries never expire automatically (only by eviction)
+/// - Size accounting counts response bodies only; headers overhead
+///   is not included
 ///
-/// For production, implement [SwrCache] with these features.
+/// For persistence or TTL, implement [SwrCache] over your own storage.
 class InMemorySwrCache implements SwrCache {
+  /// Creates an in-memory cache.
+  ///
+  /// [maxSizeBytes] caps the total size of cached response bodies.
+  /// A response larger than the whole limit is not cached at all
+  /// (and removes any stale entry under its key).
+  ///
+  /// [maxEntries] caps the number of entries.
+  ///
+  /// When both are null, the cache grows unbounded.
+  InMemorySwrCache({this.maxSizeBytes, this.maxEntries})
+    : assert(
+        maxSizeBytes == null || maxSizeBytes > 0,
+        'maxSizeBytes must be positive',
+      ),
+      assert(
+        maxEntries == null || maxEntries > 0,
+        'maxEntries must be positive',
+      );
+
+  /// Maximum total size of cached response bodies, in bytes.
+  final int? maxSizeBytes;
+
+  /// Maximum number of cached entries.
+  final int? maxEntries;
+
+  /// Insertion-ordered map; the first key is the least recently used.
   final _cache = <String, CachedResponse>{};
 
+  int _sizeBytes = 0;
+
   @override
-  Future<CachedResponse?> get(String key) async => _cache[key];
+  Future<CachedResponse?> get(String key) async {
+    final entry = _cache.remove(key);
+    if (entry == null) {
+      return null;
+    }
+    // Re-insert to mark as most recently used
+    _cache[key] = entry;
+    return entry;
+  }
 
   @override
   Future<void> set(String key, CachedResponse response) async {
+    final maxSize = maxSizeBytes;
+    if (maxSize != null && response.sizeInBytes > maxSize) {
+      // The response alone exceeds the limit: caching it would evict
+      // everything else and still break the cap. Drop the stale entry
+      // under this key so it doesn't get served forever.
+      await remove(key);
+      return;
+    }
+
+    final old = _cache.remove(key);
+    if (old != null) {
+      _sizeBytes -= old.sizeInBytes;
+    }
+
     _cache[key] = response;
+    _sizeBytes += response.sizeInBytes;
+
+    _evictIfNeeded();
+  }
+
+  void _evictIfNeeded() {
+    final maxSize = maxSizeBytes;
+    final maxCount = maxEntries;
+    while ((maxSize != null && _sizeBytes > maxSize) ||
+        (maxCount != null && _cache.length > maxCount)) {
+      final oldestKey = _cache.keys.first;
+      _sizeBytes -= _cache.remove(oldestKey)!.sizeInBytes;
+    }
   }
 
   @override
   Future<void> remove(String key) async {
-    _cache.remove(key);
+    final removed = _cache.remove(key);
+    if (removed != null) {
+      _sizeBytes -= removed.sizeInBytes;
+    }
   }
 
   @override
   Future<void> clear() async {
     _cache.clear();
+    _sizeBytes = 0;
   }
 
   /// Returns the number of entries in the cache.
   int get length => _cache.length;
 
-  /// Returns all cache keys.
+  /// Returns all cache keys, least recently used first.
   Iterable<String> get keys => _cache.keys;
+
+  /// Total size of cached response bodies, in bytes.
+  int get sizeInBytes => _sizeBytes;
 }
