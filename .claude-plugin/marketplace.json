@@ -30,6 +30,12 @@
       "description": "Usage guide for the json Dart package: type-safe manual JSON parsing over an extension type - typed access with fallbacks, nested object/list parsing, path traversal, and the List<dynamic> trap solved by listOf.",
       "source": "./plugins/json",
       "category": "dart"
+    },
+    {
+      "name": "scope-architecture",
+      "description": "Scope-based Flutter architecture toolkit: a skill with the canonical pattern (StateController from package:control + InheritedModel with aspects + Screen) and two agents - scaffold-feature to generate feature boilerplate and architecture-reviewer to verify pattern compliance.",
+      "source": "./plugins/scope-architecture",
+      "category": "flutter"
     }
   ]
 }

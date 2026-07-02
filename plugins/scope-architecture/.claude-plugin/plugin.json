@@ -1,0 +1,7 @@
+{
+  "name": "scope-architecture",
+  "version": "1.0.0",
+  "description": "Scope-based Flutter architecture: canonical pattern reference (StateController + InheritedModel with aspects) plus scaffold and review agents.",
+  "author": { "name": "tembeon" },
+  "keywords": ["flutter", "dart", "architecture", "inherited-model", "state-management", "scope", "control"]
+}
