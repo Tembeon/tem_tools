@@ -125,27 +125,28 @@ void main() {
 
 ## Flutter interop
 
-Flutter's `foundation.dart` declares its own `ValueGetter`, so importing both
-Flutter and this package makes the name ambiguous.
+Flutter's `foundation.dart` declares its own `ValueGetter`. This package
+uses a conditional export so that in Flutter builds both names refer to the
+same declaration (prior art:
+[lrhn/listen_flutter](https://github.com/lrhn/listen_flutter)):
 
-Why not a conditional import ("use Flutter's ValueGetter when available")?
-Dart's conditional imports (`if (dart.library.ui)`) do detect Flutter, but
-they only switch between files of this package - they cannot pull in
-`package:flutter`:
+```dart
+export 'src/value_getter.dart'
+    if (dart.library.ui) 'package:flutter/foundation.dart' // ignore: conditional_uri_does_not_exist
+    show ValueGetter;
+```
 
-- conditions test `dart:*` library availability; any branch referencing
-  `package:flutter` still requires an unconditional `flutter:` dependency,
-  making the package Flutter-only (pub has no optional dependencies);
-- Flutter's `ValueGetter` lives in `package:flutter/foundation.dart`, not in
-  `dart:ui`, so there is nothing to re-export from the detected SDK library;
-- all conditional branches [must expose the same API](https://dart.dev/tools/pub/create-packages#conditionally-importing-and-exporting-library-files)
-  (the analyzer always resolves the default branch), so the package cannot
-  export different names per platform either.
+When compiled by Flutter (`dart:ui` available), the export resolves to
+Flutter's own `ValueGetter` through the app's package config - no `flutter`
+dependency needed in this package, and no ambiguity at compile time.
+Outside Flutter the local typedef is used. Either way the types are
+interchangeable: Dart typedefs are structural, both are `T Function()`,
+and the `or()` extension is declared on the bare function type.
 
-It is also unnecessary. Dart typedefs are structural - both `ValueGetter`s
-are the same type `T Function()`, and the `or()` extension is declared on the
-function type, not the name. In Flutter projects just hide this package's
-typedef and use Flutter's:
+One caveat, verified empirically: the **analyzer always resolves the
+default branch** (the local typedef), so an IDE may still report
+`ambiguous_import` in files importing both this package and Flutter -
+even though the code compiles and runs. Silence it the usual way:
 
 ```dart
 import 'package:copy/copy.dart' hide ValueGetter;
