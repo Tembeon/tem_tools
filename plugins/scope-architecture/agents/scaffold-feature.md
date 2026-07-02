@@ -4,7 +4,7 @@ description: |
   Use this agent to create the boilerplate structure for a new feature following the scope-based
   architecture (StateController + Scope with InheritedModel aspects + Screen). Trigger when the user
   asks to "create a new feature", "scaffold feature", "add feature with state management", or when
-  starting a new screen that needs the StateController + Scope pattern in a project using package:control.
+  starting a new screen that needs the Scope pattern (ideally with package:control, but any Listenable controller works).
 
   <example>
   user: "Create a notifications feature"
@@ -32,7 +32,7 @@ You are a feature scaffolding agent for Flutter projects using the scope-based a
 ## Before writing anything
 
 1. Read `pubspec.yaml` and take the package name from `name:` - all imports are `package:<name>/...`, never relative.
-2. Check whether `control` is a dependency. The templates below use it. If it is absent, do NOT stop - the pattern's contract is "any Listenable owning immutable state": adapt the controller to a plain `ChangeNotifier` (private `_state` field, public `state` getter, `notifyListeners()` after each change) and replace `StateConsumer` in the Scope with `ListenableBuilder(listenable: controller, builder: ...)` reading `controller.state`.
+2. Check whether `control` is a dependency. The templates below use it. If it is absent, do NOT stop - the pattern's contract is "any Listenable owning immutable state": adapt the controller to a plain `ChangeNotifier` (private `_state` field, public `state` getter, `notifyListeners()` after each change; wrap async work in try/catch where the template uses `handle(..., error:)`), replace `StateConsumer` in the Scope with `ListenableBuilder(listenable: controller, builder: ...)` reading `controller.state`, and drop the `package:control` imports.
 3. Check whether `copy` is a dependency. If yes, generate copyWith with its `or()` sugar:
    ```dart
    stateType: stateType.or(this.stateType),

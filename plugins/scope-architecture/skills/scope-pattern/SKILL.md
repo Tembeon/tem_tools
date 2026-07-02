@@ -104,7 +104,7 @@ base class ProfileStateController extends StateController<ProfileState>
 }
 ```
 
-Conventions: handler mixin is mandatory (`SequentialControllerHandler` for ordered ops, `DroppableControllerHandler` to ignore re-entry, `ConcurrentControllerHandler` for independent ops); only `package:flutter/foundation.dart` from Flutter in controllers; catch `Exception`, never `Error`.
+Conventions: when using `package:control`, a handler mixin is mandatory (`SequentialControllerHandler` for ordered ops, `DroppableControllerHandler` to ignore re-entry, `ConcurrentControllerHandler` for independent ops); with a plain `ChangeNotifier` controller, wrap async work in try/catch yourself where `handle()`'s `error:` callback would have been. Only `package:flutter/foundation.dart` from Flutter in controllers; catch `Exception`, never `Error`.
 
 ## Scope - InheritedModel with aspects (the load-bearing part)
 
