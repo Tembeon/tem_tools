@@ -36,6 +36,12 @@
       "description": "Scope-based Flutter architecture toolkit: a skill with the canonical pattern (StateController from package:control + InheritedModel with aspects + Screen) and two agents - scaffold-feature to generate feature boilerplate and architecture-reviewer to verify pattern compliance.",
       "source": "./plugins/scope-architecture",
       "category": "flutter"
+    },
+    {
+      "name": "scope-testing",
+      "description": "Unit-testing toolkit for scope-architecture StateControllers: scaffold-state-controller-test skill generates test skeletons (success / rollback / mutex scenarios, manual fakes), test-coverage-reviewer agent finds coverage gaps by controller type. Dialect-first: both read the consumer project's conventions and etalon tests before acting.",
+      "source": "./plugins/scope-testing",
+      "category": "flutter"
     }
   ]
 }
