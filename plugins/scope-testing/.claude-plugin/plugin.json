@@ -1,0 +1,7 @@
+{
+  "name": "scope-testing",
+  "version": "1.0.0",
+  "description": "Unit-testing toolkit for scope-architecture StateControllers: a skill that scaffolds test skeletons (success / rollback / mutex scenarios, manual fakes) and a test-coverage-reviewer agent that finds coverage gaps by controller type.",
+  "author": { "name": "tembeon" },
+  "keywords": ["flutter", "dart", "testing", "unit-tests", "state-management", "scope", "control"]
+}
