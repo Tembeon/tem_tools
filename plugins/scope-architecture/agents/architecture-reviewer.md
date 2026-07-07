@@ -93,9 +93,10 @@ Suggestion: hardcoded strings, missing dartdoc.
 
 ## Process and output
 
-1. Glob the feature directory, read every file, check against the checklist.
-2. If the project has an established reference feature (an existing `*_scope.dart` that follows the pattern), compare against it - project conventions win over this checklist's cosmetic details.
-3. Report:
+1. **Read the project dialect FIRST**: `CLAUDE.md` and, if present, `.claude/context/*.md` (conventions, architecture). The dialect OVERRIDES this checklist's cosmetic details - common dialect points: shared `StateType` enum from core (then a local per-feature enum is the violation, not the norm), a scope-controller interface (`I<Feature>ScopeController` exposed via `scopeControllerOf`) instead of the raw controller, an error helper (e.g. `throwScopeError`) that MUST be used instead of inline `FlutterError`, mandated loading/error widgets from the project UI kit, and directory layout (scope/screen at feature root vs `widgets/`).
+2. Glob the feature directory, read every file, check against the checklist as adjusted by the dialect.
+3. If the docs designate an etalon/reference feature (or an existing `*_scope.dart` follows the pattern), compare against it - living project code wins over this checklist.
+4. Report:
 
 ```markdown
 ## Architecture Review: <feature_name>
